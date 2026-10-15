@@ -1,0 +1,22 @@
+# 构建产物
+/admin-server-go
+/dist/
+
+# 运行时数据（可能含密钥 / 真实口令 / 分享 token），绝不入库
+/config.json
+/config.json.tmp
+/audit.log
+/audit.log.*
+/data/
+/uploads/
+/notification-files/
+
+# 本地临时
+*.tmp
+*.log
+/tmp/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp

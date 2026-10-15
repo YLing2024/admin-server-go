@@ -60,7 +60,7 @@ make run            # 构建并前台运行
 | `ADMIN_HISTORY_FILE` | 临时目录 `admin-server-go-history.json` | 历史留样文件 |
 | `ADMIN_TOTP_SECRET_FILE` ← 新增 | `<root>/data/totp-secret.json` | 自带账号模式的 TOTP secret 文件 |
 | `REDIS_URL` ← 新增 | `redis://127.0.0.1:6379` | Redis 连接串 |
-| `HERMES_STATE_DB` | `~/.hermes/state.db` | Hermes 历史只读数据源（仅此一处只读 SQLite） |
+| `HERMES_STATE_DB` | `~/.hermes/state.db` | Hermes 历史只读数据源（服务运行期唯一的只读 SQLite） |
 | `AUTH_CENTER_BASE_URL` | 空 | 认证中心基址（未配置时转发接口 502） |
 | `AUTH_CENTER_INTERNAL_TOKEN_FILE` | `<root>/../auth-server/internal-token` | 内部令牌文件（只读、不打印） |
 | `DB_HOST` | `127.0.0.1` | MySQL 地址 |

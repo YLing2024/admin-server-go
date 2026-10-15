@@ -37,7 +37,8 @@ tools/migrate-sqlite-to-mysql/  独立迁移工具（一次性搬运旧 SQLite �
   示例统一 `example.com` / `127.0.0.1`。
 - 只监听 `127.0.0.1`（默认端口 19265）；Redis 前缀 / 采样锁 / 历史留样与线上实例隔离。
 - 依赖白名单：`github.com/go-sql-driver/mysql`、`redis/go-redis/v9`、
-  `modernc.org/sqlite`（**仅** `internal/history` 只读外部 `state.db` 用，不做自建库）；
+  `modernc.org/sqlite`（**仅**用于只读打开**外部** SQLite：`internal/history` 读 Hermes `state.db`、
+  迁移工具读旧库源文件；本服务自身存储不得用 SQLite）；
   新增依赖先写进 `go-rewrite/docs/00-CONVENTIONS.md` 再用。
 - **存储一律 MySQL**（2026-10-16 用户口径）：运行期只有 MySQL 一条路径，不得引入方言分支或 `DB_DRIVER` 开关；
   任何写进本服务库表的数据都必须经 MySQL。旧 SQLite 数据由 `tools/migrate-sqlite-to-mysql/` 搬运。

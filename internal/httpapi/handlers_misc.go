@@ -239,8 +239,12 @@ type versionCheck struct {
 	Cmd      string
 }
 
-// nodeBin 与旧实现一致：本机 Node 运行时路径。
+// nodeBin 与旧实现一致：本机 Node 运行时的 bin 目录（node/npm/playwright 等命令在此）。
 const nodeBin = "/root/.nvm/versions/node/v24.19.0/bin"
+
+// nodeModules 是同一运行时下的全局 node_modules；三个包直接读其 package.json。
+// 它不能由 nodeBin 加 "/lib/..." 拼出——nodeBin 已含结尾 /bin，拼接会得到不存在的路径。
+const nodeModules = "/root/.nvm/versions/node/v24.19.0/lib/node_modules"
 
 // versionChecks 是全部版本采集项（顺序即返回顺序）。
 var versionChecks = []versionCheck{
@@ -248,10 +252,10 @@ var versionChecks = []versionCheck{
 	{Name: "npm", Category: "runtime", Cmd: "PATH=" + nodeBin + ":$PATH " + nodeBin + "/npm --version"},
 	{Name: "Python", Category: "runtime", Cmd: "python3 --version 2>&1 | awk '{print $2}'"},
 	{Name: "Hermes", Category: "service", Cmd: "/usr/local/bin/hermes version 2>/dev/null | head -1 | grep -oE 'v[0-9.]+' | head -1 | sed 's/^v//'"},
-	{Name: "pi", Category: "service", Cmd: "cat " + nodeBin + "/lib/node_modules/@earendil-works/pi-coding-agent/package.json | grep -m1 '\"version\"' | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
-	{Name: "Codex", Category: "service", Cmd: "cat " + nodeBin + "/lib/node_modules/@openai/codex/package.json | grep -m1 '\"version\"' | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
+	{Name: "pi", Category: "service", Cmd: "cat " + nodeModules + "/@earendil-works/pi-coding-agent/package.json | grep -m1 '\"version\"' | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
+	{Name: "Codex", Category: "service", Cmd: "cat " + nodeModules + "/@openai/codex/package.json | grep -m1 '\"version\"' | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
 	{Name: "Playwright", Category: "service", Cmd: "PATH=" + nodeBin + ":$PATH " + nodeBin + "/playwright --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"},
-	{Name: "dida-cli", Category: "service", Cmd: "cat " + nodeBin + "/lib/node_modules/@suibiji/dida-cli/package.json | grep -m1 \"version\" | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
+	{Name: "dida-cli", Category: "service", Cmd: "cat " + nodeModules + "/@suibiji/dida-cli/package.json | grep -m1 \"version\" | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
 	{Name: "DeepTutor", Category: "service", Cmd: "/root/proj/deeptutor/.venv/bin/pip show deeptutor | grep -m1 Version | awk '{print $2}'"},
 }
 

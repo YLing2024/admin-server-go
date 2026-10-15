@@ -76,13 +76,13 @@ type Config struct {
 	ProcMaxRows int
 
 	// 数据库选择与连接参数（本次新增；默认 sqlite，不受旧实现影响）。
-	DBDriver           DBDriver
-	DBDSN              string
-	DBHost             string
-	DBPort             int
-	DBUser             string
-	DBPassword         string
-	DBMetricsName      string
+	DBDriver            DBDriver
+	DBDSN               string
+	DBHost              string
+	DBPort              int
+	DBUser              string
+	DBPassword          string
+	DBMetricsName       string
 	DBNotificationsName string
 }
 
@@ -129,31 +129,31 @@ func Load(get func(string) string) (*Config, error) {
 
 	tmp := os.TempDir()
 	cfg := &Config{
-		RepoRoot:                    repoRoot,
-		Host:                        host,
-		Port:                        port,
-		AuthMode:                    authMode,
-		ConfigPath:                  trimOr(get("ADMIN_CONFIG_PATH"), filepath.Join(repoRoot, "config.json")),
-		UploadDir:                   trimOr(get("ADMIN_UPLOAD_DIR"), filepath.Join(repoRoot, "uploads")),
-		FileDir:                     trimOr(get("ADMIN_FILE_DIR"), "/root/files/download"),
-		AppsFile:                    trimOr(get("ADMIN_APPS_FILE"), filepath.Join(repoRoot, "data", "apps.json")),
-		AuditLog:                    trimOr(get("ADMIN_AUDIT_LOG"), filepath.Join(repoRoot, "audit.log")),
-		TermPwFile:                  trimOr(get("ADMIN_TERM_PW_FILE"), filepath.Join(os.Getenv("HOME"), ".hermes", "term_password")),
-		ShareBaseURL:                strings.TrimRight(strings.TrimSpace(get("ADMIN_SHARE_BASE_URL")), "/"),
-		ShareFile:                   trimOr(get("ADMIN_SHARE_FILE"), filepath.Join(repoRoot, "data", "file-shares.json")),
-		MetricsDB:                   trimOr(get("ADMIN_METRICS_DB"), filepath.Join(repoRoot, "data", "metrics.db")),
-		NotificationsDB:             trimOr(get("ADMIN_NOTIFICATIONS_DB"), filepath.Join(repoRoot, "data", "notifications.db")),
-		NotificationRetentionDays:   retentionDays,
+		RepoRoot:                     repoRoot,
+		Host:                         host,
+		Port:                         port,
+		AuthMode:                     authMode,
+		ConfigPath:                   trimOr(get("ADMIN_CONFIG_PATH"), filepath.Join(repoRoot, "config.json")),
+		UploadDir:                    trimOr(get("ADMIN_UPLOAD_DIR"), filepath.Join(repoRoot, "uploads")),
+		FileDir:                      trimOr(get("ADMIN_FILE_DIR"), "/root/files/download"),
+		AppsFile:                     trimOr(get("ADMIN_APPS_FILE"), filepath.Join(repoRoot, "data", "apps.json")),
+		AuditLog:                     trimOr(get("ADMIN_AUDIT_LOG"), filepath.Join(repoRoot, "audit.log")),
+		TermPwFile:                   trimOr(get("ADMIN_TERM_PW_FILE"), filepath.Join(os.Getenv("HOME"), ".hermes", "term_password")),
+		ShareBaseURL:                 strings.TrimRight(strings.TrimSpace(get("ADMIN_SHARE_BASE_URL")), "/"),
+		ShareFile:                    trimOr(get("ADMIN_SHARE_FILE"), filepath.Join(repoRoot, "data", "file-shares.json")),
+		MetricsDB:                    trimOr(get("ADMIN_METRICS_DB"), filepath.Join(repoRoot, "data", "metrics.db")),
+		NotificationsDB:              trimOr(get("ADMIN_NOTIFICATIONS_DB"), filepath.Join(repoRoot, "data", "notifications.db")),
+		NotificationRetentionDays:    retentionDays,
 		NotificationRetentionSeconds: retentionDays * 24 * 3600,
-		RedisURL:                    trimOr(get("REDIS_URL"), "redis://127.0.0.1:6379"),
-		RedisPrefix:                 trimOr(get("ADMIN_REDIS_PREFIX"), "admin-go:session:"),
-		SamplerLock:                 trimOr(get("ADMIN_SAMPLER_LOCK"), filepath.Join(tmp, "admin-server-go-sampler.lock")),
-		HistoryFile:                 trimOr(get("ADMIN_HISTORY_FILE"), filepath.Join(tmp, "admin-server-go-history.json")),
-		TotpSecretFile:              trimOr(get("ADMIN_TOTP_SECRET_FILE"), filepath.Join(repoRoot, "data", "totp-secret.json")),
-		HermesStateDB:               trimOr(get("HERMES_STATE_DB"), filepath.Join(os.Getenv("HOME"), ".hermes", "state.db")),
-		AuthCenterBaseURL:           strings.TrimRight(strings.TrimSpace(get("AUTH_CENTER_BASE_URL")), "/"),
-		AuthCenterInternalTokenFile: trimOr(get("AUTH_CENTER_INTERNAL_TOKEN_FILE"), filepath.Join(repoRoot, "..", "auth-server", "internal-token")),
-		ProcMaxRows:                 procMaxRows,
+		RedisURL:                     trimOr(get("REDIS_URL"), "redis://127.0.0.1:6379"),
+		RedisPrefix:                  trimOr(get("ADMIN_REDIS_PREFIX"), "admin-go:session:"),
+		SamplerLock:                  trimOr(get("ADMIN_SAMPLER_LOCK"), filepath.Join(tmp, "admin-server-go-sampler.lock")),
+		HistoryFile:                  trimOr(get("ADMIN_HISTORY_FILE"), filepath.Join(tmp, "admin-server-go-history.json")),
+		TotpSecretFile:               trimOr(get("ADMIN_TOTP_SECRET_FILE"), filepath.Join(repoRoot, "data", "totp-secret.json")),
+		HermesStateDB:                trimOr(get("HERMES_STATE_DB"), filepath.Join(os.Getenv("HOME"), ".hermes", "state.db")),
+		AuthCenterBaseURL:            strings.TrimRight(strings.TrimSpace(get("AUTH_CENTER_BASE_URL")), "/"),
+		AuthCenterInternalTokenFile:  trimOr(get("AUTH_CENTER_INTERNAL_TOKEN_FILE"), filepath.Join(repoRoot, "..", "auth-server", "internal-token")),
+		ProcMaxRows:                  procMaxRows,
 	}
 	cfg.NotificationFilesDir = trimOr(get("ADMIN_NOTIFICATION_FILES_DIR"), filepath.Join(filepath.Dir(cfg.NotificationsDB), "notification-files"))
 

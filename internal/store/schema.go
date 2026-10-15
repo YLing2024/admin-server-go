@@ -20,18 +20,18 @@ var MetricKeys = []string{
 
 // MetricRound 是各指标物化值的小数位（与旧 AVG 展示口径一致）。
 var MetricRound = map[string]int{
-	"cpu":            1,
-	"mem_percent":    1,
-	"mem_used":       0,
-	"mem_total":      0,
-	"swap_percent":   1,
-	"psi_mem_avg10":  2,
-	"psi_cpu_avg10":  2,
-	"psi_io_avg10":   2,
-	"net_rx_rate":    0,
-	"net_tx_rate":    0,
-	"disk_io_read":   0,
-	"disk_io_write":  0,
+	"cpu":           1,
+	"mem_percent":   1,
+	"mem_used":      0,
+	"mem_total":     0,
+	"swap_percent":  1,
+	"psi_mem_avg10": 2,
+	"psi_cpu_avg10": 2,
+	"psi_io_avg10":  2,
+	"net_rx_rate":   0,
+	"net_tx_rate":   0,
+	"disk_io_read":  0,
+	"disk_io_write": 0,
 }
 
 // AggDef 描述一个物化聚合档位。

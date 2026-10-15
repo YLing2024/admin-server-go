@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"admin-server-go/internal/auth"
@@ -145,9 +146,36 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "服务器内部错误")
 		return
 	}
+	// HEAD 由 GET 路由承接（Express 语义）：处理器照常执行，但正文丢弃、
+	// Content-Length 取 GET 会产生的正文长度。用 headWriter 统一承接所有出口。
+	var hw *headWriter
+	out := w
+	if req.Method == http.MethodHead {
+		hw = &headWriter{ResponseWriter: w}
+		out = hw
+	}
+	s.route(out, req)
+	if hw != nil {
+		hw.finish()
+	}
+}
+
+// route 按路由表分发；命中即执行并返回。未命中时按 Express 语义处理 OPTIONS / 默认 404。
+func (s *Server) route(w http.ResponseWriter, req *http.Request) {
+	// sso 模式下本地 TOTP 首次设置整体不提供：旧实现用路径级 router.use 守卫，
+	// 对任意方法（含 OPTIONS/HEAD）都返回 404 JSON，而不是退回默认 404 页或自动 OPTIONS。
+	if s.cfg.AuthMode == config.AuthSSO && trimTrailingSlash(req.URL.Path) == "/api/admin/totp/setup" {
+		httpx.Error(w, http.StatusNotFound, "Not Found")
+		return
+	}
+	// HEAD 匹配 GET 路由（Express 的 route._handles_method 会把 HEAD 归到 GET）。
+	matched := req.Method
+	if matched == http.MethodHead {
+		matched = http.MethodGet
+	}
 	for i := range s.routes {
 		rt := &s.routes[i]
-		params, ok := matchRoute(rt, req)
+		params, ok := matchRoute(rt, req, matched)
 		if !ok {
 			continue
 		}
@@ -166,7 +194,80 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// 未匹配任何方法：OPTIONS 走 Express 的自动 Allow 响应（免鉴权），否则默认 404。
+	if req.Method == http.MethodOptions {
+		if methods := s.allowedMethods(req); len(methods) > 0 {
+			body := strings.Join(methods, ",")
+			w.Header().Set("Allow", body)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, body)
+			return
+		}
+	}
 	s.notFound(w, req)
+}
+
+// allowedMethods 复刻 Express 对未匹配 OPTIONS 的自动响应：按注册顺序收集所有「路径命中」
+// 路由的方法并去重，GET 之后追加 HEAD；`.all`/`use` 中间件不参与（由处理器自身响应）。
+// 不涉及鉴权，命中路由的鉴权要求此处一律忽略——与旧实现一致。
+func (s *Server) allowedMethods(r *http.Request) []string {
+	methods := make([]string, 0, 8)
+	seen := map[string]bool{}
+	add := func(m string) {
+		if !seen[m] {
+			seen[m] = true
+			methods = append(methods, m)
+		}
+	}
+	for i := range s.routes {
+		rt := &s.routes[i]
+		if _, ok := matchPath(rt, r.URL.Path); !ok {
+			continue
+		}
+		if rt.method == "ALL" {
+			continue
+		}
+		add(rt.method)
+		if rt.method == http.MethodGet {
+			add(http.MethodHead)
+		}
+	}
+	return methods
+}
+
+// headWriter 承接 HEAD 请求：处理器照常写响应，这里只统计正文字节数并丢弃正文，
+// finish 时补上 Content-Length（即 GET 会产生的正文长度），与 Express HEAD 语义一致。
+type headWriter struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+	bodyLen     int
+}
+
+func (h *headWriter) WriteHeader(code int) {
+	if h.wroteHeader {
+		return
+	}
+	h.status = code
+	h.wroteHeader = true
+}
+
+func (h *headWriter) Write(b []byte) (int, error) {
+	h.WriteHeader(http.StatusOK)
+	h.bodyLen += len(b)
+	return len(b), nil
+}
+
+// finish 落定状态码并补 Content-Length；204/304 无正文，不补。
+func (h *headWriter) finish() {
+	h.WriteHeader(http.StatusOK)
+	if h.status != http.StatusNoContent && h.status != http.StatusNotModified {
+		if h.ResponseWriter.Header().Get("Content-Length") == "" {
+			h.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(h.bodyLen))
+		}
+	}
+	h.ResponseWriter.WriteHeader(h.status)
 }
 
 // parseBody 在鉴权之前解析 JSON / 表单请求体（对齐 app.use(express.json) 的执行时机）。
@@ -215,14 +316,12 @@ func (bodyTooLarge) Error() string { return "请求体过大" }
 var errBodyTooLarge = bodyTooLarge{}
 
 // notFound 复刻 Express finalhandler 的默认 404 页面（未知路径 / 未匹配方法）。
+// HEAD 的正文丢弃由调用方的 headWriter 负责，这里一律照写以便统计 Content-Length。
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 	msg := "Cannot " + r.Method + " " + r.URL.Path
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusNotFound)
-	if r.Method == http.MethodHead {
-		return
-	}
 	_, _ = io.WriteString(w, "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>"+escapeHTML(msg)+"</pre>\n</body>\n</html>\n")
 }
 

@@ -119,13 +119,19 @@ func splitPattern(pattern string) (string, string) {
 	return "", pattern
 }
 
-// matchRoute 判断请求是否命中路由，并抽取路径参数。支持 `:name` 单段占位与尾部 `*` 前缀匹配。
-func matchRoute(rt *apiRoute, r *http.Request) (map[string]string, bool) {
-	if rt.method != "ALL" && rt.method != r.Method {
+// matchRoute 判断请求是否按 method 命中路由，并抽取路径参数。支持 `:name` 单段占位与尾部 `*` 前缀匹配。
+// method 由调用方给出：HEAD 请求应传 GET（Express 语义），OPTIONS 自动 Allow 走 allowedMethods。
+func matchRoute(rt *apiRoute, r *http.Request, method string) (map[string]string, bool) {
+	if rt.method != "ALL" && rt.method != method {
 		return nil, false
 	}
+	return matchPath(rt, r.URL.Path)
+}
+
+// matchPath 只判断路径是否命中路由（忽略方法），返回抽取到的路径参数。
+func matchPath(rt *apiRoute, path string) (map[string]string, bool) {
 	pattern := rt.routePath
-	actual := trimTrailingSlash(r.URL.Path)
+	actual := trimTrailingSlash(path)
 	if strings.HasSuffix(pattern, "*") {
 		prefix := trimTrailingSlash(strings.TrimSuffix(pattern, "*"))
 		if actual == prefix || strings.HasPrefix(actual, prefix+"/") {

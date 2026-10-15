@@ -23,6 +23,8 @@
 
 - DSN 由 `internal/mysql.BuildDSN` 组装：`parseTime=false`（时间列一律整数 epoch）、`utf8mb4_unicode_ci`、
   连接/读/写超时 5s/15s/15s。连接池上限 16。
+- **两个 schema 需预先建好**：服务与迁移工具都只做**表级**增量迁移，绝不 `CREATE DATABASE`；
+  建库语句以云库权威文档 `go-rewrite/docs/mysql-schema-cloud.md` 为准（账号需具备对应库的权限）。
 - 启动时对两个库各跑一次增量迁移；单个库连不上只降级该库的能力（指标库不可用 = 长期留样停用；
   通知库不可用 = 通知接口 503），不影响进程启动，与旧实现一致。
 - `config.json`（含口令哈希）仍是**本地文件**，不入库、不迁移。

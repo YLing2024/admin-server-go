@@ -61,7 +61,9 @@ func (s *Service) computeAggRows(stepSec int64, pct int, sinceSec, untilSec int6
 		return nil, nil
 	}
 	cols := strings.Join(store.MetricKeys, ", ")
-	rank := fmt.Sprintf("(%d * cnt + 99) / 100", pct)
+	// 最近秩：index = ceil(pct/100 * N)。MySQL 的 `/` 是真除法（返回 DECIMAL），
+	// 这里必须用整数除法 DIV，否则 r_xxx = 3.9900 永不等于 ROW_NUMBER，分位值全为 NULL。
+	rank := fmt.Sprintf("(%d * cnt + 99) DIV 100", pct)
 	rowNums := make([]string, len(store.MetricKeys))
 	p99 := make([]string, len(store.MetricKeys))
 	for i, k := range store.MetricKeys {

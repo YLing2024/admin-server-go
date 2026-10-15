@@ -241,9 +241,12 @@ func quoteIdents(names []string) string {
 	return strings.Join(out, ", ")
 }
 
-// CastInt 用 MySQL 的整数类型名（MySQL 的 CAST 不接受 INTEGER，只认 SIGNED / UNSIGNED）。
+// CastInt 把表达式截断取整（对齐旧 SQLite 的 CAST(... AS INTEGER) 语义）。
+// 注意不能用 CAST(expr AS SIGNED)：MySQL 的 CAST 是「四舍五入到整数」，
+// 会把 ts/60 的 2.98 进位成 3，导致分桶边界与旧实现不一致；先 TRUNCATE(x,0) 截断，
+// 再 CAST 成 SIGNED 只是为了让后续乘法得到整数类型（否则返回 DECIMAL 字符串，扫描 int64 会失败）。
 func (d *Dialect) CastInt(expr string) string {
-	return "CAST(" + expr + " AS SIGNED)"
+	return "CAST(TRUNCATE(" + expr + ", 0) AS SIGNED)"
 }
 
 // PrepareCopy 关闭本会话的外键检查（忠实拷贝用）。

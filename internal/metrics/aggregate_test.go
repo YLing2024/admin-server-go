@@ -3,24 +3,16 @@ package metrics
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"testing"
 
-	"admin-server-go/internal/sqlite"
 	"admin-server-go/internal/store"
+	"admin-server-go/internal/testsupport"
 )
 
 // openMetricsDB 建一个临时指标库并跑增量迁移，供聚合用例复用。
 func openMetricsDB(t *testing.T) *store.DB {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "metrics.db")
-	d := sqlite.New()
-	db, err := store.Open(context.Background(), d, sqlite.DSN(path), 1, d.MigrateMetrics)
-	if err != nil {
-		t.Fatalf("打开指标库失败: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
+	return testsupport.Metrics(t)
 }
 
 // TestComputeAggRowsBuckets 验证分桶取整（走方言 CastInt）与桶内最大值口径。

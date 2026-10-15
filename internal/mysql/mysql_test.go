@@ -5,11 +5,15 @@ import (
 	"testing"
 )
 
-// TestCastIntUsesSigned 守住 MySQL 的 CAST 目标类型：MySQL 只认 SIGNED/UNSIGNED，
-// 写成 INTEGER 会在服务端直接语法报错（ERROR 1064），业务 SQL 不得再写死 INTEGER。
-func TestCastIntUsesSigned(t *testing.T) {
-	if got := New().CastInt("ts / ?"); got != "CAST(ts / ? AS SIGNED)" {
-		t.Fatalf("CastInt 应生成 SIGNED 形态，实际 %q", got)
+// TestCastIntTruncates 守住 CastInt 的截断语义：MySQL 的 CAST(... AS SIGNED) 会四舍五入
+// （179/60 → 3），会让分桶边界与旧 SQLite 的 CAST(... AS INTEGER) 不一致，必须用 TRUNCATE。
+func TestCastIntTruncates(t *testing.T) {
+	got := New().CastInt("ts / ?")
+	if got != "CAST(TRUNCATE(ts / ?, 0) AS SIGNED)" {
+		t.Fatalf("CastInt 应生成 TRUNCATE+CAST 形态，实际 %q", got)
+	}
+	if strings.Contains(got, "CAST(ts / ?") {
+		t.Fatalf("不得直接 CAST 除法（会四舍五入）：%q", got)
 	}
 }
 

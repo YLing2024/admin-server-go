@@ -75,8 +75,13 @@
 | Upsert | `ON CONFLICT(<keys>) DO UPDATE SET …=excluded.…` | `ON DUPLICATE KEY UPDATE …=VALUES(…)` |
 | 列存在性 | `pragma_table_info` | `information_schema.columns` |
 | 建索引 | `CREATE INDEX IF NOT EXISTS` | `CREATE INDEX`，重复的 `Duplicate key name` 忽略 |
+| 标识符引用 | 反引号（兼容接受） | 反引号（`key` 是保留字，必须引用） |
 | 时间语义 | 整数 epoch | 整数 epoch（`parseTime=false`） |
 | 字符集 | — | `utf8mb4_unicode_ci` |
+
+> **标识符一律反引号引用**：通知类别表主键列名为 `key`，而 `KEY` 是 MySQL 保留字，裸写会让
+> `CREATE TABLE` / `SELECT` / `UPDATE` 在服务端直接报 `ERROR 1064`。两库都用反引号（SQLite 兼容接受），
+> 由 `Dialect.QuoteIdent` 统一提供，DDL、固定查询与动态拼装的 `UpsertSQL` / `migrate-data` 都走它。
 
 ## 5. 跨库搬运：`migrate-data`
 

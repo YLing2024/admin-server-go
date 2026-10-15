@@ -54,6 +54,11 @@ if [ -z "${TEST_MYSQL_HOST:-}" ]; then
   fi
 fi
 
-CGO_ENABLED=0 go test $PKGS -count=1 "$@"
+# -race 需要 cgo；其余用例保持 CGO_ENABLED=0（与 build 一致的纯静态）。
+cgo=0
+for a in "$@"; do
+  [ "$a" = "-race" ] && cgo=1
+done
+CGO_ENABLED="$cgo" go test $PKGS -count=1 "$@"
 rc=$?
 exit $rc

@@ -13,6 +13,7 @@
 - **错误响应**：统一 JSON `{ "error": "<中文可定位文案>" }`，部分接口附 `code` / `retryAfter`。未单独列出的错误分支按「错误码表」的通用项处理。
 - **请求体解析时机**：请求体在鉴权之前解析（对齐 `app.use(express.json)`）。默认上限 100kb；仅 `POST /api/admin/notifications` 放宽到 24mb。解析失败 / 超限统一 `500 { "error": "服务器内部错误" }`。
 - **未知路径**：返回 Express 默认 HTML 404 页（`Cannot <METHOD> <path>`），不是 JSON。
+- **方法回退**（对齐 Express 自动行为）：已注册路径上的 `OPTIONS` **不走鉴权**，返回 `200`，`Allow` 为该方法路径命中的全部方法（逗号分隔、**无空格**，`GET` 后追加 `HEAD`），`Content-Type: text/html; charset=utf-8`，体即 `Allow` 串；`HEAD` 由对应 `GET` 路由承接（鉴权照常生效），状态码与响应头同 `GET`、无正文，`Content-Length` 取 `GET` 正文长度。未注册路径的 `OPTIONS`/`HEAD` 仍走上面的 HTML 404。
 - **审计**：涉及写操作的接口会写 `audit.log`（记录动作、客户端 IP、成功/失败与资源标识；**绝不记录令牌明文与登记表中的 url**）。
 - **时间单位**：见「数据模型约定」。
 - **客户端 IP**：一律取自 `X-Real-IP`（反代注入），用于限流与审计定位。
@@ -584,7 +585,11 @@
 - 鉴权：`authRequired`
 - 请求参数：query `path`（string，相对文件区根，缺省根）
 - curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/files?path="`
-- 成功 200：`{ "path": "", "parent": null, "entries": [ { "name": "…", "type": "dir", "size": 0, "mtime": <ms> } ] }`（目录在前，中文按拼音序；跳过符号链接与受保护根项）
+- 成功 200：`{ "path": "", "parent": null, "entries": [ { "name": "…", "type": "dir", "size": 0, "mtime": <ms> } ] }`
+  - 键顺序固定 `path` → `parent` → `entries`；根目录 `parent` 为 `null`，子目录 `parent` 为父相对路径（一级子目录为 `""`）。
+  - `mtime` 为 Node `stat.mtimeMs` 口径的**带小数毫秒**（浮点）。
+  - 排序：目录优先，同类按 `zh-Hans-CN`（汉字按拼音且整体排在拉丁之前）；跳过符号链接与受保护根项。
+  - 与 ICU 的少数生僻字排序差异见仓库根 `COMPAT.md`。
 - 错误码：400 路径非法 / 不是目录；404 目录不存在；500 `{ "error": "读取目录失败：…" }`
 - 副作用：无；幂等：是；限流：无
 

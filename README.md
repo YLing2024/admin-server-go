@@ -70,7 +70,8 @@ make run            # 构建并前台运行
 | `DB_METRICS_NAME` | `admin_metrics` | 指标库 schema |
 | `DB_NOTIFICATIONS_NAME` | `admin_notifications` | 通知库 schema |
 
-数据库映射、建表口径与迁移工具见 `docs/DB.md`；接口清单见 `docs/API.md`。
+数据库映射、建表口径与迁移工具见 `docs/DB.md`；接口清单见 `docs/API.md`；
+与旧实现（Express）的已知差异（有意不复制 / 残余差异）见 `COMPAT.md`。
 
 ## 数据迁移
 

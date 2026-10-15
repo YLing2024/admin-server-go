@@ -220,6 +220,11 @@ func (d *Dialect) UpsertSQL(table string, columns, keyColumns []string) string {
 	return base + " ON DUPLICATE KEY UPDATE " + strings.Join(assignments, ", ")
 }
 
+// CastInt 用 MySQL 的整数类型名（MySQL 的 CAST 不接受 INTEGER，只认 SIGNED / UNSIGNED）。
+func (d *Dialect) CastInt(expr string) string {
+	return "CAST(" + expr + " AS SIGNED)"
+}
+
 // PrepareCopy 关闭本会话的外键检查（忠实拷贝用）。
 func (d *Dialect) PrepareCopy(ctx context.Context, q store.Querier) error {
 	_, err := q.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=0")

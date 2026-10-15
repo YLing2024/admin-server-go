@@ -70,7 +70,7 @@ func (s *Service) computeAggRows(stepSec int64, pct int, sinceSec, untilSec int6
 			k, rank, k, store.MetricRound[k], k)
 	}
 	sqlText := "WITH base AS (" +
-		"SELECT CAST(ts / ? AS INTEGER) * ? AS bucket, " + cols + " " +
+		"SELECT " + s.db.Dialect().CastInt("ts / ?") + " * ? AS bucket, " + cols + " " +
 		"FROM metrics WHERE ts >= ? AND ts < ?" +
 		"), ranked AS (" +
 		"SELECT bucket, COUNT(*) OVER (PARTITION BY bucket) AS cnt, " + strings.Join(rowNums, ", ") + ", " + cols + " " +
@@ -262,7 +262,7 @@ func (s *Service) planBackfillJobs() []backfillJob {
 		rawBuckets := []int64{}
 		if err := func() error {
 			rows, err := s.db.SQL.QueryContext(ctx,
-				"SELECT DISTINCT CAST(ts / ? AS INTEGER) * ? AS b FROM metrics WHERE ts >= ? AND ts < ? ORDER BY b",
+				"SELECT DISTINCT "+s.db.Dialect().CastInt("ts / ?")+" * ? AS b FROM metrics WHERE ts >= ? AND ts < ? ORDER BY b",
 				def.StepSec, def.StepSec, floorStart, end)
 			if err != nil {
 				return err

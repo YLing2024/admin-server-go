@@ -36,6 +36,9 @@ type Dialect interface {
 	InsertReturningID(ctx context.Context, q Querier, insertSQL string, args ...any) (int64, error)
 	// UpsertSQL 返回按主键冲突即更新的 INSERT（跨库搬运幂等写入）。
 	UpsertSQL(table string, columns, keyColumns []string) string
+	// CastInt 把表达式截断取整（SQLite 用 CAST(... AS INTEGER)，MySQL 用 CAST(... AS SIGNED)）。
+	// 两库的 CAST 目标类型名不同，业务 SQL 不得自行写死，否则另一库直接语法报错。
+	CastInt(expr string) string
 	// PrepareCopy 在跨库搬运前把连接置为「忠实拷贝」模式（关外键强制）。
 	PrepareCopy(ctx context.Context, q Querier) error
 }

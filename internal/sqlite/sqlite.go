@@ -215,6 +215,11 @@ func (d *Dialect) UpsertSQL(table string, columns, keyColumns []string) string {
 	return upsert(table, columns, keyColumns, "excluded.")
 }
 
+// CastInt 用 SQLite 的整数类型名。
+func (d *Dialect) CastInt(expr string) string {
+	return "CAST(" + expr + " AS INTEGER)"
+}
+
 // PrepareCopy 关闭本连接的 SQLite 外键强制（忠实拷贝用）。
 func (d *Dialect) PrepareCopy(ctx context.Context, q store.Querier) error {
 	_, err := q.ExecContext(ctx, "PRAGMA foreign_keys=OFF")

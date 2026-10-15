@@ -94,6 +94,10 @@ func (s *Service) computeAggRows(stepSec int64, pct int, sinceSec, untilSec int6
 }
 
 // scanAggRows 把结果行扫成 aggRow；数值列一律按可空浮点读取。
+//
+// 列按名字识别而非位置：computeAggRows 的结果列是 [bucket, sample_count, <指标…>]，
+// 而 queryMetricPoints 直读聚合表时列是 [bucket, <指标…>]（没有 sample_count）。
+// 若按位置把第 1 列当 sample_count，就会把首个指标（cpu）当成样本数吞掉，cpu 恒为 null。
 func scanAggRows(rows *sql.Rows, columnNames []string) ([]aggRow, error) {
 	var out []aggRow
 	for rows.Next() {
@@ -105,17 +109,20 @@ func scanAggRows(rows *sql.Rows, columnNames []string) ([]aggRow, error) {
 		if err := rows.Scan(ptrs...); err != nil {
 			return nil, err
 		}
-		row := aggRow{
-			bucket:      int64(vals[0].Float64),
-			sampleCount: int64(vals[1].Float64),
-			values:      map[string]*float64{},
-		}
-		for i := 2; i < len(columnNames); i++ {
-			if vals[i].Valid {
-				v := vals[i].Float64
-				row.values[columnNames[i]] = &v
-			} else {
-				row.values[columnNames[i]] = nil
+		row := aggRow{values: map[string]*float64{}}
+		for i, name := range columnNames {
+			switch name {
+			case "bucket":
+				row.bucket = int64(vals[i].Float64)
+			case "sample_count":
+				row.sampleCount = int64(vals[i].Float64)
+			default:
+				if vals[i].Valid {
+					v := vals[i].Float64
+					row.values[name] = &v
+				} else {
+					row.values[name] = nil
+				}
 			}
 		}
 		out = append(out, row)

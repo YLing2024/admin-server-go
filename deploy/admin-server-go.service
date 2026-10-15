@@ -17,15 +17,14 @@ Environment=HOST=127.0.0.1
 Environment=PORT=19265
 Environment=ADMIN_REPO_ROOT=/opt/admin-server-go
 
-; 可选：认证模式 / 认证中心 / 数据库
+; 可选：认证模式 / 认证中心 / 数据库（存储一律 MySQL）
 ; Environment=AUTH_MODE=builtin
 ; Environment=AUTH_CENTER_BASE_URL=http://127.0.0.1:3200
 ; Environment=AUTH_CENTER_INTERNAL_TOKEN_FILE=/opt/admin-server-go/secrets/internal-token
-; Environment=DB_DRIVER=sqlite
-; Environment=DB_DRIVER=mysql
 ; Environment=DB_HOST=127.0.0.1
 ; Environment=DB_PORT=3306
 ; Environment=DB_USER=admin
+; Environment=DB_PASSWORD=由部署环境注入
 ; Environment=DB_METRICS_NAME=admin_metrics
 ; Environment=DB_NOTIFICATIONS_NAME=admin_notifications
 

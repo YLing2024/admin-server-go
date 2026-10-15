@@ -6,10 +6,10 @@
 ## 分层
 
 ```
-cmd/admin-server-go/       入口：依赖装配 + 路由挂载 + 启动 + migrate-data 子命令
+cmd/admin-server-go/       入口：依赖装配 + 路由挂载 + 启动
 internal/config/           环境变量解析、config.json 读写（PBKDF2 口令哈希）
-internal/store/            Dialect 抽象 + DB 句柄（两库共用）
-internal/sqlite|mysql/     两套薄方言（DDL / 列探测 / 自增回填 / upsert）
+internal/store/            存储端口 + DB 句柄（两库共用；唯一实现是 MySQL）
+internal/mysql/            MySQL 方言（DDL / 列探测 / 自增回填 / upsert）
 internal/probe/            系统与服务探活采集（只读 /proc、ps、systemctl、docker）
 internal/metrics/          指标留样与物化聚合、系统接口
 internal/notifications/    通知中心（表读写、附件落盘、SSE）
@@ -17,11 +17,12 @@ internal/files/            文件区与通用上传下载
 internal/shares/           文件区临时链接（本地 JSON 账本）
 internal/apps/             应用探活面板（登记表只读消费 + 探活）
 internal/term/             Web 终端口令与票据、ttyd 会话管理
-internal/history/          Hermes 历史只读浏览
+internal/history/          Hermes 历史只读浏览（只读外部 state.db）
 internal/auth/             鉴权中间件 + 接口令牌 + TOTP / JWT
 internal/httpx/            HTTP 契约小工具（JSON、请求体、路径参数、身份）
 internal/httpapi/          路由表与分发、鉴权包装、全局行为
-internal/migrate/          migrate-data：逐库逐表拷贝 + 条数比对 + 抽样校验
+internal/testsupport/      单测夹具：临时 MySQL schema（仅测试引用）
+tools/migrate-sqlite-to-mysql/  独立迁移工具（一次性搬运旧 SQLite → MySQL；不被主程序 import）
 ```
 
 **别把业务逻辑塞回 `httpapi`**：它只做装配与分发；业务放对应 `internal/<domain>`。
@@ -35,13 +36,16 @@ internal/migrate/          migrate-data：逐库逐表拷贝 + 条数比对 + �
 - **源码/文档/提交信息不得出现真实域名、公私网 IP、邮箱、密钥、真实口令、真实分享 token**；
   示例统一 `example.com` / `127.0.0.1`。
 - 只监听 `127.0.0.1`（默认端口 19265）；Redis 前缀 / 采样锁 / 历史留样与线上实例隔离。
-- 依赖白名单：`modernc.org/sqlite`、`go-sql-driver/mysql`、`redis/go-redis/v9`；
+- 依赖白名单：`github.com/go-sql-driver/mysql`、`redis/go-redis/v9`、
+  `modernc.org/sqlite`（**仅** `internal/history` 只读外部 `state.db` 用，不做自建库）；
   新增依赖先写进 `go-rewrite/docs/00-CONVENTIONS.md` 再用。
+- **存储一律 MySQL**（2026-10-16 用户口径）：运行期只有 MySQL 一条路径，不得引入方言分支或 `DB_DRIVER` 开关；
+  任何写进本服务库表的数据都必须经 MySQL。旧 SQLite 数据由 `tools/migrate-sqlite-to-mysql/` 搬运。
 
 ## 命令
 
 ```bash
-make check     # 路由↔文档机检 + go vet ./... + go test ./... -count=1（改完先跑这个）
+make check     # 路由↔文档机检 + go vet ./... + 单测（脚本起临时 MySQL 8.4 容器，验完即删）
 make race      # 并发（SSE / 采样器）用 -race 再跑一遍
 make build
 ```
@@ -60,8 +64,8 @@ make build
 - `builtin` 模式**忽略**外部 `X-Auth-User`（防提权）；`sso` 模式自带登录入口一律 404。
 - 客户端 IP 一律读 `X-Real-IP`（缺失才退化），否则限流会退化成全局桶。
 - 文件区：受保护根项隐身且整树禁写、只读根项仅根禁删、跳过软链、严格防路径穿越。
-- 历史浏览只读打开 `state.db`，请求内 open→query→close，**不可写、不可长连接持有**。
-- Hermes `state.db` 与通知库禁止被本服务的迁移/写入路径误伤；`migrate-data` 源库一律只读。
+- 历史浏览只读打开 `state.db`，请求内 open→query→close，**不可写、不可长连接持有**（这是本仓库唯一的 SQLite，且是别人的只读文件）。
+- Hermes `state.db` 禁止被本服务写入；旧 SQLite 源库在迁移工具里一律只读打开。
 
 ## 工程基线
 

@@ -10,7 +10,7 @@
 ## 技术栈
 
 - Go 1.26，HTTP 仅标准库 `net/http`（SSE 自实现 `http.Flusher`），日志 `log/slog`
-- SQLite `modernc.org/sqlite`（纯 Go、无 cgo）/ MySQL `github.com/go-sql-driver/mysql`（`DB_DRIVER` 切换）
+- MySQL `github.com/go-sql-driver/mysql`（**仅 MySQL**，无方言开关）；旧 SQLite 数据由 `tools/migrate-sqlite-to-mysql/` 一次性搬运
 - Redis `github.com/redis/go-redis/v9`（会话 / 票据 / 限流 / 采样锁）
 - TOTP / 终端口令哈希自实现（标准库 `crypto/*`），不依赖旧仓库的 JS 模块
 - 无 web 框架、无 ORM
@@ -25,7 +25,8 @@ make race           # go test ./... -count=1 -race
 make run            # 构建并前台运行
 ```
 
-直接运行时等价于 `admin-server-go serve`（可省略）；跨库搬运用 `admin-server-go migrate-data …`（见 `docs/DB.md`）。
+直接运行时等价于 `admin-server-go serve`（可省略）。旧 SQLite 数据的一次性搬运见 `docs/DB.md` 的
+`tools/migrate-sqlite-to-mysql/`。
 
 默认监听 `127.0.0.1:19265`（**刻意与线上 3100 实例隔离**，两者可并存）。Redis 前缀、采样锁、
 历史留样、TOTP secret 文件默认也都指向本仓库自己的位置；差异逐条记在 `docs/DB.md`。
@@ -51,9 +52,7 @@ make run            # 构建并前台运行
 | `ADMIN_TERM_PW_FILE` | `~/.hermes/term_password` | 终端口令哈希（`sha256$<salt>$<hash>`，0600） |
 | `ADMIN_SHARE_BASE_URL` | 空 | 分享链接基址（拼 `url` 字段用） |
 | `ADMIN_SHARE_FILE` | `<root>/data/file-shares.json` | 分享账本（本地 JSON） |
-| `ADMIN_METRICS_DB` | `<root>/data/metrics.db` | 指标库（SQLite 时） |
-| `ADMIN_NOTIFICATIONS_DB` | `<root>/data/notifications.db` | 通知库（SQLite 时） |
-| `ADMIN_NOTIFICATION_FILES_DIR` | 通知库同级 `notification-files/` | 通知附件根目录 |
+| `ADMIN_NOTIFICATION_FILES_DIR` | `<root>/data/notification-files` | 通知附件根目录 |
 | `ADMIN_NOTIFICATION_RETENTION_DAYS` | `180` | 通知保留天数（清理连带附件目录） |
 | `ADMIN_PROC_MAX_ROWS` | `2000` | 进程排行最多返回行数 |
 | `ADMIN_REDIS_PREFIX` | `admin-go:session:` | 会话 key 前缀（测试隔离用） |
@@ -61,28 +60,31 @@ make run            # 构建并前台运行
 | `ADMIN_HISTORY_FILE` | 临时目录 `admin-server-go-history.json` | 历史留样文件 |
 | `ADMIN_TOTP_SECRET_FILE` ← 新增 | `<root>/data/totp-secret.json` | 自带账号模式的 TOTP secret 文件 |
 | `REDIS_URL` ← 新增 | `redis://127.0.0.1:6379` | Redis 连接串 |
-| `HERMES_STATE_DB` | `~/.hermes/state.db` | Hermes 历史只读数据源 |
+| `HERMES_STATE_DB` | `~/.hermes/state.db` | Hermes 历史只读数据源（仅此一处只读 SQLite） |
 | `AUTH_CENTER_BASE_URL` | 空 | 认证中心基址（未配置时转发接口 502） |
 | `AUTH_CENTER_INTERNAL_TOKEN_FILE` | `<root>/../auth-server/internal-token` | 内部令牌文件（只读、不打印） |
-| `DB_DRIVER` ← 新增 | `sqlite` | `sqlite` / `mysql`（未选 mysql 时不加载 MySQL 驱动） |
-| `DB_DSN` ← 新增 | 空 | MySQL 原生 DSN（优先生效） |
-| `DB_HOST` / `DB_PORT` ← 新增 | — / `3306` | MySQL 地址 |
-| `DB_USER` / `DB_PASSWORD` ← 新增 | — | MySQL 账号 |
-| `DB_METRICS_NAME` / `DB_NOTIFICATIONS_NAME` ← 新增 | — | MySQL 下两个 schema 名 |
+| `DB_HOST` | `127.0.0.1` | MySQL 地址 |
+| `DB_PORT` | `3306` | MySQL 端口 |
+| `DB_USER` | 必填 | MySQL 账号（缺失启动报错） |
+| `DB_PASSWORD` | 空 | MySQL 口令 |
+| `DB_METRICS_NAME` | `admin_metrics` | 指标库 schema |
+| `DB_NOTIFICATIONS_NAME` | `admin_notifications` | 通知库 schema |
 
-数据库映射、迁移与 `migrate-data` 子命令见 `docs/DB.md`；接口清单见 `docs/API.md`。
+数据库映射、建表口径与迁移工具见 `docs/DB.md`；接口清单见 `docs/API.md`。
 
 ## 数据迁移
 
+旧 SQLite 库用独立工具一次性搬进 MySQL（源库只读、不删不清；目标库先增量迁移再批量 upsert，可重复执行）：
+
 ```bash
-admin-server-go migrate-data \
-  --from-driver sqlite --from-metrics ./metrics.db --from-notifications ./notifications.db \
-  --to-driver mysql --to-metrics "user:pass@tcp(127.0.0.1:3306)/admin_metrics" \
-  --to-notifications "user:pass@tcp(127.0.0.1:3306)/admin_notifications" \
+go run ./tools/migrate-sqlite-to-mysql \
+  --db all \
+  --src-metrics ./data/metrics.db --src-notifications ./data/notifications.db \
+  --dst-host 127.0.0.1 --dst-user root --dst-password "$MYSQL_PWD" \
   --verify
 ```
 
-源库只读、不删不清；目标库先增量迁移再 upsert，可重复执行。
+`--dry-run` 只统计不写；`--verify` 逐表比对条数并抽样比对行；详见 `docs/DB.md`。
 
 ## 部署
 

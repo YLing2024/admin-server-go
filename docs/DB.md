@@ -103,6 +103,7 @@ admin-server-go migrate-data \
 - `--from-metrics` / `--from-notifications` / `--to-metrics` / `--to-notifications`：`sqlite` 时是文件路径；
   `mysql` 时是 go-sql-driver 原生 DSN（含库名）。
 - `--dry-run`：只统计与校验，**不写目标库**。
+- `--db metrics|notifications`：只搬某个逻辑库（默认两个都搬）。单库复跑时避免连带重写大表。
 - `--verify`：搬运后逐表比对目标条数与源条数，并抽样比对行；不一致 → 非 0 退出。
 - `--sample N`：抽样校验条数（默认 5，按主键排序取首尾若干条）。
 - 顺序：指标库 `metrics → metrics_1m → metrics_1h → metrics_1d`；通知库 `notification_types →

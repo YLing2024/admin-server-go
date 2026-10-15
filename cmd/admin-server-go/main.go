@@ -46,11 +46,17 @@ func main() {
 // run 解析子命令并分派；get 便于测试注入环境变量。
 func run(args []string, get func(string) string) error {
 	logger := newLogger()
-	if len(args) > 0 && args[0] == "migrate-data" {
-		return runMigrateData(args[1:], logger)
-	}
 	if len(args) > 0 {
-		return fmt.Errorf("未知参数 %q（可用：serve、migrate-data）", args[0])
+		switch args[0] {
+		case "migrate-data":
+			return runMigrateData(args[1:], logger)
+		case "serve":
+			if len(args) > 1 {
+				return fmt.Errorf("serve 不接受额外参数：%v", args[1:])
+			}
+		default:
+			return fmt.Errorf("未知参数 %q（可用：serve、migrate-data）", args[0])
+		}
 	}
 	cfg, err := config.Load(get)
 	if err != nil {

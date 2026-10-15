@@ -25,6 +25,8 @@ make race           # go test ./... -count=1 -race
 make run            # 构建并前台运行
 ```
 
+直接运行时等价于 `admin-server-go serve`（可省略）；跨库搬运用 `admin-server-go migrate-data …`（见 `docs/DB.md`）。
+
 默认监听 `127.0.0.1:19265`（**刻意与线上 3100 实例隔离**，两者可并存）。Redis 前缀、采样锁、
 历史留样、TOTP secret 文件默认也都指向本仓库自己的位置；差异逐条记在 `docs/DB.md`。
 

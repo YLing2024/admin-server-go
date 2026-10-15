@@ -27,9 +27,8 @@ type Options struct {
 // admin 与 public 各自持有一个采集器（独立 10s 缓存 + 单飞），互不影响；登记表解析结果按 mtime
 // 缓存在 regCache / regMu 下。tcpProbe 是注入的本地端口探活闭包。
 type Service struct {
-	cfg   *config.Config
-	log   *slog.Logger
-	probe *probe.Service
+	cfg *config.Config
+	log *slog.Logger
 
 	tcpProbe tcpChecker
 
@@ -55,7 +54,6 @@ func New(opts Options) *Service {
 	s := &Service{
 		cfg:     opts.Cfg,
 		log:     log,
-		probe:   pr,
 		refresh: NewRefreshLimiter(refreshWindowMs),
 	}
 	// 单条探活统一 1500ms 超时，与登记表内的探活约定一致。

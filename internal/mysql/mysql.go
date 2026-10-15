@@ -1,10 +1,9 @@
-// Package mysql 是 admin-server-go 存储层的 MySQL 方言（github.com/go-sql-driver/mysql）。
-//
-// 差异全部收在这里：DSN 组装、DDL 类型（VARCHAR/BIGINT AUTO_INCREMENT/DOUBLE）、列探测
-// （information_schema.columns）、自增主键回填（LastInsertId）、upsert（ON DUPLICATE KEY UPDATE）、
+// Package mysql 是 admin-server-go 存储层的 MySQL 方言实现（github.com/go-sql-driver/mysql，
+// 自 2026-10-16 起为唯一实现）。集中处理：DSN 组装、DDL 类型（VARCHAR/BIGINT AUTO_INCREMENT/DOUBLE）、
+// 列探测（information_schema.columns）、自增主键回填（LastInsertId）、upsert（ON DUPLICATE KEY UPDATE）、
 // seed（INSERT IGNORE）。迁移只做增量，绝不 DROP / TRUNCATE / 重建表。
 //
-// MySQL 下两个库映射为同一实例下的两个 schema，由 DSN 的库名选定；连接各自独立。
+// 两个逻辑库映射为同一 MySQL 实例下的两个 schema，由 DSN 的库名选定；连接各自独立。
 package mysql
 
 import (
@@ -24,9 +23,6 @@ type Dialect struct{}
 
 // New 返回 MySQL 方言。
 func New() *Dialect { return &Dialect{} }
-
-// Name 返回方言名。
-func (d *Dialect) Name() string { return "mysql" }
 
 // DriverName 返回 go-sql-driver/mysql 注册的驱动名。
 func (d *Dialect) DriverName() string { return "mysql" }

@@ -1,9 +1,10 @@
 // Package config 负责 admin-server-go 的环境变量解析与 config.json 读写。
 //
 // 口径逐项对齐旧实现 src/config.ts 与 src/db.ts：环境变量同名，取值非法/未设置一律回退默认；
-// AUTH_MODE 非法回落 builtin。与旧实现的有意差异只有两处，且都属于「新仓库必须与旧实例隔离」
-// 的部署约定（需求书 §5）：默认 PORT 改为 19265，Redis 前缀 / 采样锁 / 历史文件 / 密钥文件
-// 默认指向本仓库自己的位置，避免与线上 3100 实例互相干扰。差异逐条记在 docs/DB.md。
+// AUTH_MODE 非法回落 builtin。与旧实现的有意差异都属于「新仓库必须与旧实例隔离」的部署约定
+// （需求书 §5）：默认 PORT 改为 19265，Redis 前缀 / 采样锁 / 历史文件 / 密钥文件默认指向本仓库
+// 自己的位置，避免与线上 3100 实例互相干扰。存储自 2026-10-16 起一律 MySQL（无方言开关），
+// 两个逻辑库库名默认即云库名。差异逐条记在 docs/DB.md。
 package config
 
 import (
@@ -25,16 +26,6 @@ const (
 	AuthSSO AuthMode = "sso"
 )
 
-// DBDriver 数据库方言。
-type DBDriver string
-
-const (
-	// DBDriverSQLite 两个独立的 modernc SQLite 文件（默认）。
-	DBDriverSQLite DBDriver = "sqlite"
-	// DBDriverMySQL 同一 MySQL 实例下的两个 schema，由 DB_METRICS_NAME / DB_NOTIFICATIONS_NAME 指定。
-	DBDriverMySQL DBDriver = "mysql"
-)
-
 // Config 是启动时确定的运行时配置快照（不含 config.json 的可变内容，后者见 FileStore）。
 type Config struct {
 	// RepoRoot 是默认相对路径的解析基准（进程工作目录，与旧实现 __dirname/.. 等价）。
@@ -53,8 +44,6 @@ type Config struct {
 	ShareBaseURL string
 	ShareFile    string
 
-	MetricsDB            string
-	NotificationsDB      string
 	NotificationFilesDir string
 	// NotificationRetentionSeconds 由 ADMIN_NOTIFICATION_RETENTION_DAYS 换算（默认 180 天）。
 	NotificationRetentionDays    int
@@ -75,9 +64,8 @@ type Config struct {
 	// ProcMaxRows 对齐 ADMIN_PROC_MAX_ROWS：进程排行最多返回的行数。
 	ProcMaxRows int
 
-	// 数据库选择与连接参数（本次新增；默认 sqlite，不受旧实现影响）。
-	DBDriver            DBDriver
-	DBDSN               string
+	// 数据库连接参数（仅 MySQL）。两个逻辑库映射为同一实例下的两个 schema，
+	// 库名由 DB_METRICS_NAME / DB_NOTIFICATIONS_NAME 指定（默认即云库名）。
 	DBHost              string
 	DBPort              int
 	DBUser              string
@@ -141,8 +129,6 @@ func Load(get func(string) string) (*Config, error) {
 		TermPwFile:                   trimOr(get("ADMIN_TERM_PW_FILE"), filepath.Join(os.Getenv("HOME"), ".hermes", "term_password")),
 		ShareBaseURL:                 strings.TrimRight(strings.TrimSpace(get("ADMIN_SHARE_BASE_URL")), "/"),
 		ShareFile:                    trimOr(get("ADMIN_SHARE_FILE"), filepath.Join(repoRoot, "data", "file-shares.json")),
-		MetricsDB:                    trimOr(get("ADMIN_METRICS_DB"), filepath.Join(repoRoot, "data", "metrics.db")),
-		NotificationsDB:              trimOr(get("ADMIN_NOTIFICATIONS_DB"), filepath.Join(repoRoot, "data", "notifications.db")),
 		NotificationRetentionDays:    retentionDays,
 		NotificationRetentionSeconds: retentionDays * 24 * 3600,
 		RedisURL:                     trimOr(get("REDIS_URL"), "redis://127.0.0.1:6379"),
@@ -155,14 +141,12 @@ func Load(get func(string) string) (*Config, error) {
 		AuthCenterInternalTokenFile:  trimOr(get("AUTH_CENTER_INTERNAL_TOKEN_FILE"), filepath.Join(repoRoot, "..", "auth-server", "internal-token")),
 		ProcMaxRows:                  procMaxRows,
 	}
-	cfg.NotificationFilesDir = trimOr(get("ADMIN_NOTIFICATION_FILES_DIR"), filepath.Join(filepath.Dir(cfg.NotificationsDB), "notification-files"))
+	cfg.NotificationFilesDir = trimOr(get("ADMIN_NOTIFICATION_FILES_DIR"), filepath.Join(repoRoot, "data", "notification-files"))
 
 	db, err := loadDB(get)
 	if err != nil {
 		return nil, err
 	}
-	cfg.DBDriver = db.driver
-	cfg.DBDSN = db.dsn
 	cfg.DBHost = db.host
 	cfg.DBPort = db.port
 	cfg.DBUser = db.user
@@ -173,8 +157,6 @@ func Load(get func(string) string) (*Config, error) {
 }
 
 type dbOptions struct {
-	driver      DBDriver
-	dsn         string
 	host        string
 	port        int
 	user        string
@@ -183,49 +165,30 @@ type dbOptions struct {
 	notifName   string
 }
 
-// loadDB 解析数据库选择。默认 sqlite；只有 DB_DRIVER=mysql 时才读取 MySQL 连接参数。
+// loadDB 解析 MySQL 连接参数。两个逻辑库库名默认即云库名（admin_metrics / admin_notifications），
+// 因此常规部署只需给出 DB_HOST / DB_USER / DB_PASSWORD。
 func loadDB(get func(string) string) (dbOptions, error) {
-	raw := strings.ToLower(strings.TrimSpace(get("DB_DRIVER")))
-	switch raw {
-	case "", "sqlite":
-		return dbOptions{driver: DBDriverSQLite}, nil
-	case "mysql":
-		dsn := strings.TrimSpace(get("DB_DSN"))
-		if dsn != "" {
-			names := strings.SplitN(dsn, "?", 2)[0]
-			name := ""
-			if i := strings.LastIndex(names, "/"); i >= 0 {
-				name = names[i+1:]
-			}
-			return dbOptions{driver: DBDriverMySQL, dsn: dsn, metricsName: name, notifName: name}, nil
-		}
-		host := strings.TrimSpace(get("DB_HOST"))
-		user := strings.TrimSpace(get("DB_USER"))
-		metricsName := strings.TrimSpace(get("DB_METRICS_NAME"))
-		notifName := strings.TrimSpace(get("DB_NOTIFICATIONS_NAME"))
-		if host == "" || user == "" || metricsName == "" || notifName == "" {
-			return dbOptions{}, &ConfigError{Message: "DB_DRIVER=mysql 需要 DB_HOST/DB_USER/DB_METRICS_NAME/DB_NOTIFICATIONS_NAME（或一条 DB_DSN）"}
-		}
-		port := 3306
-		if p := strings.TrimSpace(get("DB_PORT")); p != "" {
-			n, err := strconv.Atoi(p)
-			if err != nil || n < 1 || n > 65535 {
-				return dbOptions{}, &ConfigError{Message: fmt.Sprintf("DB_PORT 必须是 1–65535 的整数，当前为「%s」", p)}
-			}
-			port = n
-		}
-		return dbOptions{
-			driver:      DBDriverMySQL,
-			host:        host,
-			port:        port,
-			user:        user,
-			password:    get("DB_PASSWORD"),
-			metricsName: metricsName,
-			notifName:   notifName,
-		}, nil
-	default:
-		return dbOptions{}, &ConfigError{Message: fmt.Sprintf("DB_DRIVER 只能是 sqlite / mysql，当前为「%s」", raw)}
+	host := trimOr(get("DB_HOST"), defaultDBHost)
+	user := strings.TrimSpace(get("DB_USER"))
+	if user == "" {
+		return dbOptions{}, &ConfigError{Message: "缺少 DB_USER（MySQL 账号必填；连接参数见 docs/DB.md）"}
 	}
+	port := 3306
+	if p := strings.TrimSpace(get("DB_PORT")); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return dbOptions{}, &ConfigError{Message: fmt.Sprintf("DB_PORT 必须是 1–65535 的整数，当前为「%s」", p)}
+		}
+		port = n
+	}
+	return dbOptions{
+		host:        host,
+		port:        port,
+		user:        user,
+		password:    get("DB_PASSWORD"),
+		metricsName: trimOr(get("DB_METRICS_NAME"), defaultMetricsDBName),
+		notifName:   trimOr(get("DB_NOTIFICATIONS_NAME"), defaultNotificationsDBName),
+	}, nil
 }
 
 func trimOr(raw, fallback string) string {
@@ -235,6 +198,16 @@ func trimOr(raw, fallback string) string {
 	return fallback
 }
 
+// 数据库默认值：库名默认即云库名（唯一权威见 go-rewrite/docs/mysql-schema-cloud.md）。
+const (
+	// defaultDBHost 是未配置 DB_HOST 时的回环地址。
+	defaultDBHost = "127.0.0.1"
+	// defaultMetricsDBName 是指标库默认 schema。
+	defaultMetricsDBName = "admin_metrics"
+	// defaultNotificationsDBName 是通知库默认 schema。
+	defaultNotificationsDBName = "admin_notifications"
+)
+
 // SessionTTL 是 builtin 会话有效期（秒），与旧实现一致：12 小时，校验通过后滑动续期。
 const SessionTTL = 12 * 3600
 
@@ -243,16 +216,10 @@ func NowMillis() int64 { return time.Now().UnixMilli() }
 
 // Describe 生成启动摘要（不含任何敏感值）。
 func (c *Config) Describe() string {
-	dbDesc := string(c.DBDriver)
-	if c.DBDriver == DBDriverSQLite {
-		dbDesc += " " + c.MetricsDB + " + " + c.NotificationsDB
-	} else {
-		dbDesc += " " + c.DBMetricsName + " + " + c.DBNotificationsName
-	}
 	return strings.Join([]string{
 		fmt.Sprintf("监听 http://%s:%d", c.Host, c.Port),
 		"认证模式 " + string(c.AuthMode),
-		"数据库 " + dbDesc,
+		"数据库 mysql " + c.DBMetricsName + " + " + c.DBNotificationsName,
 		"文件区 " + c.FileDir,
 	}, " | ")
 }

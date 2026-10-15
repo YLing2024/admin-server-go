@@ -1,6 +1,9 @@
 // Package history 实现 Hermes 历史会话的只读浏览：数据源 HERMES_STATE_DB，
 // 每次请求独立「打开 → 查询 → 关闭」，只读打开，绝不长连接持有（Hermes 网关在写同一个库）。
 // 语义逐条对齐旧实现 src/routes/history.ts。
+//
+// 这里保留 modernc SQLite 驱动**仅用于读取外部只读 SQLite 文件**（Hermes 自己的 state.db）：
+// 不属于「本服务支持 SQLite」，本服务自身的存储一律 MySQL，没有任何自建 SQLite 库路径或方言开关。
 package history
 
 import (
@@ -13,7 +16,7 @@ import (
 	"admin-server-go/internal/httpx"
 	"admin-server-go/internal/util"
 
-	// 注册 modernc sqlite 驱动（只读打开 state.db）。
+	// 注册 modernc sqlite 驱动；只读打开外部 state.db（本服务自身存储一律 MySQL）。
 	_ "modernc.org/sqlite"
 )
 

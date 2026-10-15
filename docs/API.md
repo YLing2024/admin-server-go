@@ -55,7 +55,7 @@
 
 - **时间**：`ts` / `readAt`（通知）为 **epoch 秒**；`createdAt` / `expiresAt` / `lastUsedAt`（令牌、分享）为 **epoch 毫秒**；`system.uptime` 为**秒**。一律 UTC 数值，由前端按本地时区展示。
 - **ID 类型**：
-  - 通知 `id`：**number**（自增行 id；SQLite / MySQL 均为整数）。
+  - 通知 `id`：**number**（MySQL `BIGINT AUTO_INCREMENT`，整数）。
   - 接口令牌 `id`：**string**（`sha256(token)` 十六进制），令牌明文仅生成时返回一次。
   - 分享 `id`：**string**（随机短 id）；分享 `token`：**string**（随机 URL-safe）。
   - 会话 `id`：**string**（会话 token）；历史会话 `id`：**string**（Hermes 会话 id）。
@@ -70,8 +70,12 @@
 
 ### 3.4 存储与迁移
 
-- 指标库（`metrics`）与通知库（`notifications`）支持 SQLite 与 MySQL 两种方言，由 `DB_DRIVER` 选择；映射与迁移见 `docs/DB.md`。
-- 迁移只做增量（`CREATE TABLE IF NOT EXISTS` / `ADD COLUMN`），老库（缺 `notifications.type` 列、缺聚合表）原地升级可用。
+- 存储**一律 MySQL**：指标库与通知库是两个 schema，由 `DB_METRICS_NAME`（默认 `admin_metrics`）与
+  `DB_NOTIFICATIONS_NAME`（默认 `admin_notifications`）指向；连接参数与建表口径见 `docs/DB.md`。
+  本服务没有 SQLite 自建库路径、方言分支或 `DB_DRIVER` 开关。
+- 迁移只做增量（`CREATE TABLE IF NOT EXISTS` / `ADD COLUMN`），老库（缺 `notifications.type` 列、
+  缺聚合表）原地升级可用；绝不 DROP / TRUNCATE / 重建表，不动云库已有数据。
+- 旧 SQLite 数据由独立工具 `tools/migrate-sqlite-to-mysql/` 一次性搬运（该工具不被服务主程序 import）。
 - `config.json`（含口令哈希）仍是本地文件，不入库；Redis 语义（会话 / 票据 / 限流 / 采样锁）不变。
 
 ## 四、系统与进程

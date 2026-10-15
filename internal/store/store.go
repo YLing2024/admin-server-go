@@ -1,8 +1,9 @@
-// Package store 是 admin-server-go 两个数据库（指标 metrics、通知 notifications）的统一访问层。
+// Package store 是 admin-server-go 两个数据库（指标 metrics、通知 notifications）的访问层。
 //
-// 两库的差异（DDL、列存在性探测、自增主键回填、upsert 形态、时间列读取）全部下沉到 Dialect
-// 接口的两套实现（internal/sqlite / internal/mysql），业务层不感知驱动。所有查询使用 `?`
-// 占位符，不做字符串拼接。迁移只做增量：绝不 DROP / TRUNCATE / 重建表。
+// 自 2026-10-16 起存储一律 MySQL（用户口径变更，SQLite 已移除）：业务层只经本包与
+// internal/mysql 方言访问数据库，运行期不存在方言分支或 DB_DRIVER 开关。保留 Dialect
+// 端口是为了让 store 不反向依赖 internal/mysql（避免循环导入），而非为了兼容第二方言。
+// 所有查询使用 `?` 占位符，不做字符串拼接。迁移只做增量：绝不 DROP / TRUNCATE / 重建表。
 package store
 
 import (
@@ -18,11 +19,9 @@ type Querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// Dialect 抽象两库差异。两套实现见 internal/sqlite 与 internal/mysql。
+// Dialect 是存储方言端口；当前唯一实现是 internal/mysql（MySQL）。
 type Dialect interface {
-	// Name 返回 "sqlite" / "mysql"。
-	Name() string
-	// DriverName 返回 database/sql 驱动名。
+	// DriverName 返回 database/sql 驱动名（现恒为 "mysql"）。
 	DriverName() string
 	// MigrateMetrics 增量迁移指标库（raw + 分钟/小时/天物化桶）。
 	MigrateMetrics(ctx context.Context, db *sql.DB) error
@@ -33,14 +32,14 @@ type Dialect interface {
 	// TableColumns 返回表列名（按定义顺序）。
 	TableColumns(ctx context.Context, q Querier, table string) ([]string, error)
 	// QuoteIdent 引用标识符（表/列名）以防撞上关键字保留字。
-	// 两库都用反引号：MySQL 必需（如 key 是保留字），SQLite 兼容接受。
+	// MySQL 用反引号（如 key 是保留字）。
 	QuoteIdent(name string) string
 	// InsertReturningID 执行单行 INSERT 并回填自增主键。
 	InsertReturningID(ctx context.Context, q Querier, insertSQL string, args ...any) (int64, error)
 	// UpsertSQL 返回按主键冲突即更新的 INSERT（跨库搬运幂等写入）。
 	UpsertSQL(table string, columns, keyColumns []string) string
-	// CastInt 把表达式截断取整（SQLite 用 CAST(... AS INTEGER)，MySQL 用 CAST(... AS SIGNED)）。
-	// 两库的 CAST 目标类型名不同，业务 SQL 不得自行写死，否则另一库直接语法报错。
+	// CastInt 把表达式截断取整（MySQL 用 CAST(... AS SIGNED)）。
+	// 业务 SQL 不得自行写死 CAST 目标类型。
 	CastInt(expr string) string
 	// PrepareCopy 在跨库搬运前把连接置为「忠实拷贝」模式（关外键强制）。
 	PrepareCopy(ctx context.Context, q Querier) error
@@ -54,9 +53,6 @@ type DB struct {
 
 // Dialect 返回当前方言。
 func (db *DB) Dialect() Dialect { return db.dialect }
-
-// Driver 返回驱动名。
-func (db *DB) Driver() string { return db.dialect.Name() }
 
 // Open 打开数据库并跑指定迁移。maxOpenConns 对 SQLite 场景取 1，避免写锁竞争。
 func Open(ctx context.Context, dialect Dialect, dsn string, maxOpenConns int, migrate func(context.Context, *sql.DB) error) (*DB, error) {

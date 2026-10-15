@@ -256,12 +256,10 @@ func writeFile0600(fullPath string, data []byte) error {
 	return os.Chmod(fullPath, 0o600)
 }
 
-// attachmentUpsertSQL 返回附件元信息写入语句（两库 upsert 形态不同）。
+// attachmentUpsertSQL 返回附件元信息写入语句。主键为 (notification_id, name)，
+// MySQL 的 REPLACE INTO 等价于「删除+插入」，对无外键引用的附件表是幂等 upsert。
 func (s *Service) attachmentUpsertSQL() string {
-	if s.db != nil && s.db.Driver() == "mysql" {
-		return "REPLACE INTO notification_attachments (notification_id, name, mime, size) VALUES (?, ?, ?, ?)"
-	}
-	return "INSERT OR REPLACE INTO notification_attachments (notification_id, name, mime, size) VALUES (?, ?, ?, ?)"
+	return "REPLACE INTO notification_attachments (notification_id, name, mime, size) VALUES (?, ?, ?, ?)"
 }
 
 // listAttachments 返回单条通知的附件元信息（按 name 升序）。

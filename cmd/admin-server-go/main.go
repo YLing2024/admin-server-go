@@ -1,22 +1,18 @@
 // Command admin-server-go 是个人网站 Admin 后端的 Go 重写版。
 //
-// 运行形态：
-//
-//	admin-server-go                起 HTTP 服务（默认，监听 127.0.0.1:19265）
-//	admin-server-go migrate-data … 跨库搬运（SQLite ⇄ MySQL），源库只读
+// 运行形态：admin-server-go [serve]，起 HTTP 服务（默认，监听 127.0.0.1:19265）。
+// 存储一律 MySQL（无方言开关）；旧 SQLite 数据由独立工具 tools/migrate-sqlite-to-mysql 一次性搬运。
 package main
 
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -26,12 +22,10 @@ import (
 	"admin-server-go/internal/files"
 	"admin-server-go/internal/httpapi"
 	"admin-server-go/internal/metrics"
-	"admin-server-go/internal/migrate"
 	"admin-server-go/internal/mysql"
 	"admin-server-go/internal/notifications"
 	"admin-server-go/internal/probe"
 	"admin-server-go/internal/shares"
-	"admin-server-go/internal/sqlite"
 	"admin-server-go/internal/state"
 	"admin-server-go/internal/store"
 )
@@ -48,14 +42,12 @@ func run(args []string, get func(string) string) error {
 	logger := newLogger()
 	if len(args) > 0 {
 		switch args[0] {
-		case "migrate-data":
-			return runMigrateData(args[1:], logger)
 		case "serve":
 			if len(args) > 1 {
 				return fmt.Errorf("serve 不接受额外参数：%v", args[1:])
 			}
 		default:
-			return fmt.Errorf("未知参数 %q（可用：serve、migrate-data）", args[0])
+			return fmt.Errorf("未知参数 %q（可用：serve）", args[0])
 		}
 	}
 	cfg, err := config.Load(get)
@@ -72,9 +64,6 @@ func newLogger() *slog.Logger {
 // serve 开库 → 装配服务 → listen → 起后台任务 → 等退出信号。
 func serve(cfg *config.Config, logger *slog.Logger) error {
 	ctx := context.Background()
-	if err := ensureDataDirs(cfg); err != nil {
-		return err
-	}
 
 	files_, generatedPassword, _, err := config.LoadFile(cfg.ConfigPath)
 	if err != nil {
@@ -153,46 +142,18 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	return waitForShutdown(server, metricsSvc, logger)
 }
 
-// ensureDataDirs 预建 SQLite 文件所在目录（modernc 不自动建父目录）。
-func ensureDataDirs(cfg *config.Config) error {
-	if cfg.DBDriver != config.DBDriverSQLite {
-		return nil
-	}
-	for _, path := range []string{cfg.MetricsDB, cfg.NotificationsDB} {
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return fmt.Errorf("创建数据目录失败: %w", err)
-		}
-	}
-	return nil
-}
-
-// openDB 按 DB_DRIVER 打开一个逻辑库（metrics / notifications）并跑增量迁移。
-// 未选 MySQL 时不会拼 MySQL DSN、不会建立 MySQL 连接。
+// openDB 打开一个逻辑库（metrics / notifications）并跑增量迁移。
+// 库名由 logical 选定：metrics → DB_METRICS_NAME，其余 → DB_NOTIFICATIONS_NAME。
 func openDB(ctx context.Context, cfg *config.Config, logical string) (*store.DB, error) {
-	if cfg.DBDriver == config.DBDriverMySQL {
-		dialect := mysql.New()
-		dsn := cfg.DBDSN
-		if dsn == "" {
-			name := cfg.DBMetricsName
-			if logical == "notifications" {
-				name = cfg.DBNotificationsName
-			}
-			dsn = mysql.BuildDSN(cfg.DBHost, cfg.DBPort, name, cfg.DBUser, cfg.DBPassword)
-		}
-		migrateFn := dialect.MigrateMetrics
-		if logical == "notifications" {
-			migrateFn = dialect.MigrateNotifications
-		}
-		return store.Open(ctx, dialect, dsn, 16, migrateFn)
-	}
-	dialect := sqlite.New()
-	path := cfg.MetricsDB
+	dialect := mysql.New()
+	name := cfg.DBMetricsName
 	migrateFn := dialect.MigrateMetrics
 	if logical == "notifications" {
-		path = cfg.NotificationsDB
+		name = cfg.DBNotificationsName
 		migrateFn = dialect.MigrateNotifications
 	}
-	return store.Open(ctx, dialect, sqlite.DSN(path), 1, migrateFn)
+	dsn := mysql.BuildDSN(cfg.DBHost, cfg.DBPort, name, cfg.DBUser, cfg.DBPassword)
+	return store.Open(ctx, dialect, dsn, 16, migrateFn)
 }
 
 // waitForShutdown 优雅退出：停采样器 → 关 HTTP。
@@ -210,44 +171,5 @@ func waitForShutdown(server *http.Server, metricsSvc *metrics.Service, logger *s
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("HTTP 关闭超时", "err", err.Error())
 	}
-	return nil
-}
-
-// runMigrateData 解析 migrate-data 参数并执行跨库搬运。
-func runMigrateData(args []string, logger *slog.Logger) error {
-	fs := flag.NewFlagSet("migrate-data", flag.ContinueOnError)
-	from := migrate.Side{}
-	to := migrate.Side{}
-	fs.StringVar(&from.Driver, "from-driver", "sqlite", "源库驱动：sqlite | mysql")
-	fs.StringVar(&from.Metrics, "from-metrics", "", "源指标库：sqlite 文件路径或 mysql DSN")
-	fs.StringVar(&from.Notifications, "from-notifications", "", "源通知库：sqlite 文件路径或 mysql DSN")
-	fs.StringVar(&to.Driver, "to-driver", "", "目标库驱动：sqlite | mysql")
-	fs.StringVar(&to.Metrics, "to-metrics", "", "目标指标库：sqlite 文件路径或 mysql DSN")
-	fs.StringVar(&to.Notifications, "to-notifications", "", "目标通知库：sqlite 文件路径或 mysql DSN")
-	dryRun := fs.Bool("dry-run", false, "只统计与校验，不写目标库")
-	verify := fs.Bool("verify", false, "搬运后比对条数与抽样行")
-	sample := fs.Int("sample", 5, "每表首尾抽样条数")
-	onlyDB := fs.String("db", "", "只搬运某个逻辑库：metrics | notifications（默认两个都搬）")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if to.Driver == "" {
-		return errors.New("缺少 --to-driver")
-	}
-	if *onlyDB != "" && *onlyDB != "metrics" && *onlyDB != "notifications" {
-		return fmt.Errorf("--db 只能是 metrics / notifications，当前为 %q", *onlyDB)
-	}
-	opts := migrate.Options{
-		DryRun: *dryRun,
-		Verify: *verify,
-		Sample: *sample,
-		OnlyDB: *onlyDB,
-		Logf:   func(format string, a ...any) { logger.Info(fmt.Sprintf(format, a...)) },
-	}
-	report, err := migrate.Run(context.Background(), from, to, opts)
-	if err != nil {
-		return err
-	}
-	fmt.Print(report.Summary())
 	return nil
 }

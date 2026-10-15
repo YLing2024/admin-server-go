@@ -51,11 +51,9 @@ func (s *Service) ensureNotificationType(ctx context.Context, key string) {
 	if key == "" || s.db == nil {
 		return
 	}
-	sqlText := "INSERT OR IGNORE INTO notification_types (`key`, label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, NULL, 0, 1, NULL)"
-	if s.db.Driver() == "mysql" {
-		sqlText = "INSERT IGNORE INTO notification_types (`key`, label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, NULL, 0, 1, NULL)"
-	}
-	if _, err := s.db.SQL.ExecContext(ctx, sqlText, key, key); err != nil {
+	if _, err := s.db.SQL.ExecContext(ctx,
+		"INSERT IGNORE INTO notification_types (`key`, label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, NULL, 0, 1, NULL)",
+		key, key); err != nil {
 		s.log.Warn("通知类别自动注册失败（不影响写入）", "key", key, "error", err)
 	}
 }
@@ -289,7 +287,7 @@ func (s *Service) updateNotificationType(ctx context.Context, key string, patch 
 		return 0, err
 	}
 	if n == 0 {
-		// MySQL 未启用 CLIENT_FOUND_ROWS 时「值未变化」也返回 0；以存在性判定，保持与 SQLite 一致。
+		// MySQL 未启用 CLIENT_FOUND_ROWS 时「值未变化」也返回 0；以存在性判定，避免把「无变化」误报成「不存在」。
 		cnt, err := s.count(ctx, "SELECT COUNT(*) FROM notification_types WHERE `key` = ?", key)
 		if err != nil {
 			return 0, err

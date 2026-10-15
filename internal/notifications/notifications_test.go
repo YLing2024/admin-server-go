@@ -13,8 +13,7 @@ import (
 	"testing"
 
 	"admin-server-go/internal/config"
-	"admin-server-go/internal/sqlite"
-	"admin-server-go/internal/store"
+	"admin-server-go/internal/testsupport"
 )
 
 // PNG_BYTES 是 1x1 PNG 头字节，仅用于构造合法 base64 负载（与旧单测一致）。
@@ -22,17 +21,11 @@ var pngBytes = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00
 
 func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
-// newTestService 打开一个临时 SQLite 通知库并构造 Service。
+// newTestService 打开一个临时 MySQL 通知库并构造 Service。
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	dir := t.TempDir()
-	dialect := sqlite.New()
-	ctx := context.Background()
-	db, err := store.Open(ctx, dialect, sqlite.DSN(filepath.Join(dir, "notifications.db")), 1, dialect.MigrateNotifications)
-	if err != nil {
-		t.Fatalf("打开测试通知库失败: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := testsupport.Notifications(t)
 	cfg := &config.Config{
 		NotificationFilesDir:         filepath.Join(dir, "notification-files"),
 		NotificationRetentionSeconds: 180 * 24 * 3600,
@@ -388,7 +381,7 @@ func TestDefaultLevelAndAutoRegisterType(t *testing.T) {
 		t.Fatalf("未注册类别默认应为 normal，得到 %s", res2.Level)
 	}
 	var label string
-	if err := s.db.SQL.QueryRowContext(ctx, "SELECT label FROM notification_types WHERE key = ?", "brand-new").Scan(&label); err != nil || label != "brand-new" {
+	if err := s.db.SQL.QueryRowContext(ctx, "SELECT label FROM notification_types WHERE `key` = ?", "brand-new").Scan(&label); err != nil || label != "brand-new" {
 		t.Fatalf("未注册类别应自动注册 label=key: label=%q err=%v", label, err)
 	}
 }

@@ -35,8 +35,9 @@ type FileStore struct {
 }
 
 // LoadFile 读取（不存在则按默认生成）config.json。
-// created 表示本次是首次生成；error 只在写入失败时返回，解析失败按旧实现降级为默认配置。
-func LoadFile(path string) (store *FileStore, created bool, err error) {
+// generatedPassword 仅在本次首先生成口令时非空（供启动日志一次性提示，不落库、不回显到接口）。
+// created 表示配置文件本次是首次生成；error 只在写入失败时返回，解析失败按旧实现降级为默认配置。
+func LoadFile(path string) (store *FileStore, generatedPassword string, created bool, err error) {
 	f := &FileStore{path: path, data: map[string]any{}}
 	raw, readErr := os.ReadFile(path)
 	if readErr == nil {
@@ -48,16 +49,17 @@ func LoadFile(path string) (store *FileStore, created bool, err error) {
 		if _, plain := f.data["admin_password"]; !plain {
 			pw, gerr := randomToken(12)
 			if gerr != nil {
-				return nil, false, gerr
+				return nil, "", false, gerr
 			}
 			h, herr := hashPassword(pw)
 			if herr != nil {
-				return nil, false, herr
+				return nil, "", false, herr
 			}
 			f.data["admin_password_hash"] = h
+			generatedPassword = pw
 			created = readErr != nil
 			if werr := f.persist(); werr != nil {
-				return nil, false, werr
+				return nil, "", false, werr
 			}
 		}
 	}
@@ -65,7 +67,7 @@ func LoadFile(path string) (store *FileStore, created bool, err error) {
 		// 权限调整失败不影响启动，与旧实现一致。
 		_ = chErr
 	}
-	return f, created, nil
+	return f, generatedPassword, created, nil
 }
 
 // Get 返回原始值（不存在为 nil）。

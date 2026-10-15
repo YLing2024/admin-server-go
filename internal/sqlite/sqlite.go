@@ -39,6 +39,11 @@ func DSN(path string) string {
 		"&_pragma=busy_timeout(8000)"
 }
 
+// ReadOnlyDSN 是 migrate-data 读取源库用的只读连接串（mode=ro，绝不写源库）。
+func ReadOnlyDSN(path string) string {
+	return "file:" + path + "?mode=ro&_pragma=busy_timeout(8000)"
+}
+
 func metricsDDL() []string {
 	cols := make([]string, len(store.MetricKeys))
 	for i, k := range store.MetricKeys {

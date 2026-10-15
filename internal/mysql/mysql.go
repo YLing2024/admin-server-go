@@ -67,6 +67,10 @@ func metricsDDL() []string {
 	return stmts
 }
 
+// typeKeyCol 是通知类别表主键列名。key 在 MySQL 是保留字必须引用；
+// 而 DDL 用反引号原生字符串书写（无法内嵌反引号），故对该标识符单独拼接。
+const typeKeyCol = "`key`"
+
 var notificationsDDL = []string{
 	`CREATE TABLE IF NOT EXISTS notifications (
 		id         BIGINT NOT NULL AUTO_INCREMENT,
@@ -85,14 +89,14 @@ var notificationsDDL = []string{
 		KEY idx_notifications_source (source)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	`CREATE TABLE IF NOT EXISTS notification_types (
-		key           VARCHAR(64) NOT NULL,
+		` + typeKeyCol + `         VARCHAR(64) NOT NULL,
 		label         VARCHAR(190) NOT NULL,
 		description   TEXT NULL,
 		default_level VARCHAR(16) NULL,
 		sort          INT DEFAULT 0,
 		enabled       TINYINT DEFAULT 1,
 		archived_at   BIGINT NULL,
-		PRIMARY KEY (key)
+		PRIMARY KEY (` + typeKeyCol + `)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	`CREATE TABLE IF NOT EXISTS notification_attachments (
 		notification_id BIGINT NOT NULL,
@@ -138,7 +142,7 @@ func (d *Dialect) MigrateNotifications(ctx context.Context, db *sql.DB) error {
 	}
 	for _, row := range defaultTypes {
 		if _, err := db.ExecContext(ctx,
-			"INSERT IGNORE INTO notification_types (key, label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, ?, ?, 1, NULL)",
+			"INSERT IGNORE INTO notification_types ("+typeKeyCol+", label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, ?, ?, 1, NULL)",
 			row.key, row.label, row.level, row.sort); err != nil {
 			return fmt.Errorf("预置通知类别失败: %w", err)
 		}
@@ -211,13 +215,30 @@ func (d *Dialect) UpsertSQL(table string, columns, keyColumns []string) string {
 		if contains(keyColumns, c) {
 			continue
 		}
-		assignments = append(assignments, c+" = VALUES("+c+")")
+		assignments = append(assignments, quoteIdent(c)+" = VALUES("+quoteIdent(c)+")")
 	}
-	base := "INSERT INTO " + table + " (" + strings.Join(columns, ", ") + ") VALUES (" + strings.Join(placeholders, ", ") + ")"
+	base := "INSERT INTO " + quoteIdent(table) + " (" + quoteIdents(columns) + ") VALUES (" + strings.Join(placeholders, ", ") + ")"
 	if len(assignments) == 0 {
 		return base
 	}
 	return base + " ON DUPLICATE KEY UPDATE " + strings.Join(assignments, ", ")
+}
+
+// QuoteIdent 用反引号引用标识符（MySQL 里 key 等是保留字，必须引用）。
+func (d *Dialect) QuoteIdent(name string) string { return quoteIdent(name) }
+
+// quoteIdent 用反引号引用单个标识符，内部反引号翻倍转义。
+func quoteIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+// quoteIdents 逐项引用并逗号连接。
+func quoteIdents(names []string) string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = quoteIdent(n)
+	}
+	return strings.Join(out, ", ")
 }
 
 // CastInt 用 MySQL 的整数类型名（MySQL 的 CAST 不接受 INTEGER，只认 SIGNED / UNSIGNED）。

@@ -32,6 +32,9 @@ type Dialect interface {
 	ColumnExists(ctx context.Context, q Querier, table, column string) (bool, error)
 	// TableColumns 返回表列名（按定义顺序）。
 	TableColumns(ctx context.Context, q Querier, table string) ([]string, error)
+	// QuoteIdent 引用标识符（表/列名）以防撞上关键字保留字。
+	// 两库都用反引号：MySQL 必需（如 key 是保留字），SQLite 兼容接受。
+	QuoteIdent(name string) string
 	// InsertReturningID 执行单行 INSERT 并回填自增主键。
 	InsertReturningID(ctx context.Context, q Querier, insertSQL string, args ...any) (int64, error)
 	// UpsertSQL 返回按主键冲突即更新的 INSERT（跨库搬运幂等写入）。

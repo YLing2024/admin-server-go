@@ -201,6 +201,9 @@ func (d *Dialect) TableColumns(ctx context.Context, q store.Querier, table strin
 	return cols, rows.Err()
 }
 
+// QuoteIdent 用反引号引用标识符（SQLite 兼容接受）。
+func (d *Dialect) QuoteIdent(name string) string { return quoteIdent(name) }
+
 // InsertReturningID 用 RETURNING 一次拿回自增主键。
 func (d *Dialect) InsertReturningID(ctx context.Context, q store.Querier, insertSQL string, args ...any) (int64, error) {
 	var id int64
@@ -236,13 +239,27 @@ func upsert(table string, columns, keyColumns []string, prefix string) string {
 		if contains(keyColumns, c) {
 			continue
 		}
-		assignments = append(assignments, c+" = "+prefix+c)
+		assignments = append(assignments, quoteIdent(c)+" = "+prefix+quoteIdent(c))
 	}
-	base := "INSERT INTO " + table + " (" + strings.Join(columns, ", ") + ") VALUES (" + strings.Join(placeholders, ", ") + ")"
+	base := "INSERT INTO " + quoteIdent(table) + " (" + quoteIdents(columns) + ") VALUES (" + strings.Join(placeholders, ", ") + ")"
 	if len(assignments) == 0 {
 		return base
 	}
-	return base + " ON CONFLICT(" + strings.Join(keyColumns, ", ") + ") DO UPDATE SET " + strings.Join(assignments, ", ")
+	return base + " ON CONFLICT(" + quoteIdents(keyColumns) + ") DO UPDATE SET " + strings.Join(assignments, ", ")
+}
+
+// quoteIdent 用反引号引用单个标识符。反引号是 MySQL 必需、SQLite 兼容的引用方式。
+func quoteIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+// quoteIdents 逐项引用并逗号连接。
+func quoteIdents(names []string) string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = quoteIdent(n)
+	}
+	return strings.Join(out, ", ")
 }
 
 func contains(list []string, v string) bool {

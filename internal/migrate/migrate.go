@@ -193,7 +193,7 @@ func copyTable(ctx context.Context, dbName string, spec tableSpec, src, dst *sto
 		return tr, fmt.Errorf("%s.%s 主键列缺失（%v）", dbName, spec.table, spec.keys)
 	}
 
-	if err := countRows(ctx, src.SQL, spec.table, &tr.SourceRows); err != nil {
+	if err := countRows(ctx, src, spec.table, &tr.SourceRows); err != nil {
 		return tr, fmt.Errorf("%s.%s 统计源表条数失败: %w", dbName, spec.table, err)
 	}
 	if !opts.DryRun {
@@ -203,7 +203,7 @@ func copyTable(ctx context.Context, dbName string, spec tableSpec, src, dst *sto
 		}
 		tr.Copied = copied
 	}
-	if err := countRows(ctx, dst.SQL, spec.table, &tr.TargetRows); err != nil {
+	if err := countRows(ctx, dst, spec.table, &tr.TargetRows); err != nil {
 		return tr, fmt.Errorf("%s.%s 统计目标表条数失败: %w", dbName, spec.table, err)
 	}
 	logf("%s.%s 源 %d 行，目标 %d 行，拷贝 %d 行", dbName, spec.table, tr.SourceRows, tr.TargetRows, tr.Copied)
@@ -224,7 +224,7 @@ func copyTable(ctx context.Context, dbName string, spec tableSpec, src, dst *sto
 
 // performCopy 在单事务内以 upsert 逐行拷入目标库。
 func performCopy(ctx context.Context, spec tableSpec, cols, keys []string, src, dst *store.DB) (int64, error) {
-	selectSQL := "SELECT " + strings.Join(cols, ", ") + " FROM " + spec.table
+	selectSQL := "SELECT " + qi(src.Dialect(), cols) + " FROM " + src.Dialect().QuoteIdent(spec.table)
 	upsert := dst.Dialect().UpsertSQL(spec.table, cols, keys)
 	var copied int64
 	err := dst.Tx(ctx, func(q store.Querier) error {
@@ -266,12 +266,12 @@ func performCopy(ctx context.Context, spec tableSpec, cols, keys []string, src, 
 
 // sampleVerify 按主键取源表首尾各 N 行，逐行到目标表按主键取回并逐列比对（跨库类型归一比较）。
 func sampleVerify(ctx context.Context, spec tableSpec, cols, keys []string, src, dst *store.DB, n int) (int, error) {
-	order := " ORDER BY " + strings.Join(keys, ", ")
-	head, err := sampleRows(ctx, src.SQL, spec.table, cols, order+" ASC LIMIT "+strconv.Itoa(n))
+	order := " ORDER BY " + qi(src.Dialect(), keys)
+	head, err := sampleRows(ctx, src.SQL, src.Dialect(), spec.table, cols, order+" ASC LIMIT "+strconv.Itoa(n))
 	if err != nil {
 		return 0, err
 	}
-	tail, err := sampleRows(ctx, src.SQL, spec.table, cols, order+" DESC LIMIT "+strconv.Itoa(n))
+	tail, err := sampleRows(ctx, src.SQL, src.Dialect(), spec.table, cols, order+" DESC LIMIT "+strconv.Itoa(n))
 	if err != nil {
 		return 0, err
 	}
@@ -284,7 +284,7 @@ func sampleVerify(ctx context.Context, spec tableSpec, cols, keys []string, src,
 			continue
 		}
 		seen[keyID] = true
-		target, err := lookupRow(ctx, dst.SQL, spec.table, cols, keys, keyVals)
+		target, err := lookupRow(ctx, dst.SQL, dst.Dialect(), spec.table, cols, keys, keyVals)
 		if err != nil {
 			return checked, err
 		}
@@ -301,8 +301,8 @@ func sampleVerify(ctx context.Context, spec tableSpec, cols, keys []string, src,
 	return checked, nil
 }
 
-func sampleRows(ctx context.Context, db *sql.DB, table string, cols []string, suffix string) ([][]any, error) {
-	rows, err := db.QueryContext(ctx, "SELECT "+strings.Join(cols, ", ")+" FROM "+table+suffix)
+func sampleRows(ctx context.Context, db *sql.DB, d store.Dialect, table string, cols []string, suffix string) ([][]any, error) {
+	rows, err := db.QueryContext(ctx, "SELECT "+qi(d, cols)+" FROM "+d.QuoteIdent(table)+suffix)
 	if err != nil {
 		return nil, err
 	}
@@ -322,12 +322,12 @@ func sampleRows(ctx context.Context, db *sql.DB, table string, cols []string, su
 	return out, rows.Err()
 }
 
-func lookupRow(ctx context.Context, db *sql.DB, table string, cols, keys []string, keyVals []any) ([]any, error) {
+func lookupRow(ctx context.Context, db *sql.DB, d store.Dialect, table string, cols, keys []string, keyVals []any) ([]any, error) {
 	where := make([]string, len(keys))
 	for i, k := range keys {
-		where[i] = k + " = ?"
+		where[i] = d.QuoteIdent(k) + " = ?"
 	}
-	q := "SELECT " + strings.Join(cols, ", ") + " FROM " + table + " WHERE " + strings.Join(where, " AND ") + " LIMIT 1"
+	q := "SELECT " + qi(d, cols) + " FROM " + d.QuoteIdent(table) + " WHERE " + strings.Join(where, " AND ") + " LIMIT 1"
 	vals := make([]any, len(cols))
 	ptrs := make([]any, len(cols))
 	for i := range vals {
@@ -343,8 +343,17 @@ func lookupRow(ctx context.Context, db *sql.DB, table string, cols, keys []strin
 	return vals, nil
 }
 
-func countRows(ctx context.Context, db *sql.DB, table string, out *int64) error {
-	return db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(out)
+func countRows(ctx context.Context, db *store.DB, table string, out *int64) error {
+	return db.SQL.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+db.Dialect().QuoteIdent(table)).Scan(out)
+}
+
+// qi 用方言逐项引用标识符再逗号连接（列名可能撞关键字，如通知类别的 key）。
+func qi(d store.Dialect, names []string) string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = d.QuoteIdent(n)
+	}
+	return strings.Join(out, ", ")
 }
 
 func keyValues(cols, keys []string, row []any) []any {

@@ -51,9 +51,9 @@ func (s *Service) ensureNotificationType(ctx context.Context, key string) {
 	if key == "" || s.db == nil {
 		return
 	}
-	sqlText := "INSERT OR IGNORE INTO notification_types (key, label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, NULL, 0, 1, NULL)"
+	sqlText := "INSERT OR IGNORE INTO notification_types (`key`, label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, NULL, 0, 1, NULL)"
 	if s.db.Driver() == "mysql" {
-		sqlText = "INSERT IGNORE INTO notification_types (key, label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, NULL, 0, 1, NULL)"
+		sqlText = "INSERT IGNORE INTO notification_types (`key`, label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, NULL, 0, 1, NULL)"
 	}
 	if _, err := s.db.SQL.ExecContext(ctx, sqlText, key, key); err != nil {
 		s.log.Warn("通知类别自动注册失败（不影响写入）", "key", key, "error", err)
@@ -66,7 +66,7 @@ func (s *Service) notificationDefaultLevel(ctx context.Context, key string) stri
 		return "normal"
 	}
 	var lvl sql.NullString
-	if err := s.db.SQL.QueryRowContext(ctx, "SELECT default_level FROM notification_types WHERE key = ?", key).Scan(&lvl); err != nil {
+	if err := s.db.SQL.QueryRowContext(ctx, "SELECT default_level FROM notification_types WHERE `key` = ?", key).Scan(&lvl); err != nil {
 		return "normal"
 	}
 	if lvl.Valid && store.NotificationLevels[lvl.String] {
@@ -240,9 +240,9 @@ type listResultTypes struct {
 // listNotificationTypes 列出未软删的类别（按 sort、label 排序，含当前库内统计）。
 func (s *Service) listNotificationTypes(ctx context.Context) (listResultTypes, error) {
 	rows, err := s.db.SQL.QueryContext(ctx,
-		"SELECT t.key, t.label, t.description, t.default_level, t.sort, t.enabled, "+
-			"(SELECT COUNT(*) FROM notifications n WHERE n.type = t.key) AS count, "+
-			"(SELECT COUNT(*) FROM notifications n WHERE n.type = t.key AND n.read_at IS NULL) AS unread "+
+		"SELECT t.`key`, t.label, t.description, t.default_level, t.sort, t.enabled, "+
+			"(SELECT COUNT(*) FROM notifications n WHERE n.type = t.`key`) AS count, "+
+			"(SELECT COUNT(*) FROM notifications n WHERE n.type = t.`key` AND n.read_at IS NULL) AS unread "+
 			"FROM notification_types t WHERE t.archived_at IS NULL ORDER BY t.sort ASC, t.label ASC")
 	if err != nil {
 		return listResultTypes{}, err
@@ -280,7 +280,7 @@ func (s *Service) updateNotificationType(ctx context.Context, key string, patch 
 		return 0, nil
 	}
 	args := append(append([]any{}, patch.args...), key)
-	res, err := s.db.SQL.ExecContext(ctx, "UPDATE notification_types SET "+strings.Join(patch.sets, ", ")+" WHERE key = ?", args...)
+	res, err := s.db.SQL.ExecContext(ctx, "UPDATE notification_types SET "+strings.Join(patch.sets, ", ")+" WHERE `key` = ?", args...)
 	if err != nil {
 		return 0, err
 	}
@@ -290,7 +290,7 @@ func (s *Service) updateNotificationType(ctx context.Context, key string, patch 
 	}
 	if n == 0 {
 		// MySQL 未启用 CLIENT_FOUND_ROWS 时「值未变化」也返回 0；以存在性判定，保持与 SQLite 一致。
-		cnt, err := s.count(ctx, "SELECT COUNT(*) FROM notification_types WHERE key = ?", key)
+		cnt, err := s.count(ctx, "SELECT COUNT(*) FROM notification_types WHERE `key` = ?", key)
 		if err != nil {
 			return 0, err
 		}

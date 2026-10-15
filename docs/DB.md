@@ -1,5 +1,10 @@
 # admin-server-go 数据库（SQLite / MySQL 双支持）
 
+> **口径说明（2026-10-16）**：本仓库当前实现的是需求书旧版口径「双库支持」（默认 SQLite，`DB_DRIVER=mysql`
+> 切 MySQL）。需求书 §3 已于本次委派进行中改为「仅 MySQL」，本仓库的双库能力即该委派的交付物；
+> 后续的「删 SQLite、收敛到仅 MySQL、补 `tools/migrate-sqlite-to-mysql/`」是独立的一轮改造，尚未进行。
+> 在收敛完成前，本文档描述的 SQLite 分支仍然是有效行为。
+
 本服务原有**两个** SQLite 库（`metrics.db` 指标、`notifications.db` 通知）。Go 重写用同一套业务代码
 同时支持 SQLite（默认）与 MySQL，方言差异全部下沉到 `internal/sqlite` 与 `internal/mysql` 两套薄方言，
 业务层（`internal/store` 及以上）不感知驱动。**不把业务 SQL 降级成两库公共子集**：DDL、upsert、自增主键

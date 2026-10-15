@@ -11,12 +11,20 @@ import (
 	"admin-server-go/internal/util"
 )
 
-// listEntry 是列目录返回的单个条目。
+// listEntry 是列目录返回的单个条目（JSON 键顺序与旧实现 res.json 一致）。
 type listEntry struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Size  int64  `json:"size"`
-	Mtime int64  `json:"mtime"`
+	Name  string  `json:"name"`
+	Type  string  `json:"type"`
+	Size  int64   `json:"size"`
+	Mtime float64 `json:"mtime"`
+}
+
+// filesListResponse 是列目录响应体；字段顺序 path→parent→entries 对齐旧实现，
+// 不能用 map（encoding/json 会按键名字典序输出，得到 entries/parent/path 的错误顺序）。
+type filesListResponse struct {
+	Path    string      `json:"path"`
+	Parent  *string     `json:"parent"`
+	Entries []listEntry `json:"entries"`
 }
 
 // FilesList 处理 GET /api/admin/files：列目录，目录在前、同类按名称排序，跳过符号链接与受保护根项。
@@ -64,13 +72,16 @@ func (s *Service) FilesList(w http.ResponseWriter, r *http.Request) {
 		if isDir {
 			typ = "dir"
 		}
-		out = append(out, listEntry{Name: e.Name(), Type: typ, Size: size, Mtime: info.ModTime().UnixMilli()})
+		// 复刻 Node stat.mtimeMs：整秒毫秒 + 纳秒折算，避免 UnixMilli 的截断误差。
+		mt := info.ModTime()
+		mtime := float64(mt.Unix())*1000 + float64(mt.Nanosecond())/1e6
+		out = append(out, listEntry{Name: e.Name(), Type: typ, Size: size, Mtime: mtime})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Type != out[j].Type {
 			return out[i].Type == "dir"
 		}
-		return out[i].Name < out[j].Name
+		return lessByName(out[i].Name, out[j].Name)
 	})
 	rel := s.RelFromFull(dir)
 	var parent *string
@@ -81,7 +92,7 @@ func (s *Service) FilesList(w http.ResponseWriter, r *http.Request) {
 		}
 		parent = &p
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"path": rel, "parent": parent, "entries": out})
+	httpx.WriteJSON(w, http.StatusOK, filesListResponse{Path: rel, Parent: parent, Entries: out})
 }
 
 // FilesDownload 处理 GET /api/admin/files/download：下载文件区内的单个普通文件。

@@ -52,6 +52,9 @@ type Options struct {
 	Verify bool
 	// Sample 是每表首尾各抽样的条数（0 用默认 5）。
 	Sample int
+	// OnlyDB 限定只搬运某个逻辑库（"metrics" / "notifications"）；空串表示两个都搬。
+	// 单库复跑（如修完通知 DDL 只补通知）时避免连带重写大表。
+	OnlyDB string
 	// Logf 输出进度（可为 nil）。
 	Logf func(format string, args ...any)
 }
@@ -79,11 +82,22 @@ type logicalDB struct {
 	migrate func(context.Context, *sql.DB) error
 }
 
-func logicalDBs(d store.Dialect) []logicalDB {
-	return []logicalDB{
+// logicalDBs 返回要搬运的逻辑库；only 非空时只返回该库（"metrics" / "notifications"）。
+func logicalDBs(d store.Dialect, only string) []logicalDB {
+	all := []logicalDB{
 		{name: "metrics", tables: metricsTables, migrate: d.MigrateMetrics},
 		{name: "notifications", tables: notificationTables, migrate: d.MigrateNotifications},
 	}
+	if only == "" {
+		return all
+	}
+	out := make([]logicalDB, 0, 1)
+	for _, l := range all {
+		if l.name == only {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // Run 执行搬运并返回报告。
@@ -105,7 +119,7 @@ func Run(ctx context.Context, from, to Side, opts Options) (Report, error) {
 	}
 
 	var report Report
-	for _, logical := range logicalDBs(dstDialect) {
+	for _, logical := range logicalDBs(dstDialect, opts.OnlyDB) {
 		srcDB, err := openSide(ctx, srcDialect, from, logical, true)
 		if err != nil {
 			return report, fmt.Errorf("打开源库 %s 失败: %w", logical.name, err)

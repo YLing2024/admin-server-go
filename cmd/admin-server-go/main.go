@@ -221,16 +221,21 @@ func runMigrateData(args []string, logger *slog.Logger) error {
 	dryRun := fs.Bool("dry-run", false, "只统计与校验，不写目标库")
 	verify := fs.Bool("verify", false, "搬运后比对条数与抽样行")
 	sample := fs.Int("sample", 5, "每表首尾抽样条数")
+	onlyDB := fs.String("db", "", "只搬运某个逻辑库：metrics | notifications（默认两个都搬）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if to.Driver == "" {
 		return errors.New("缺少 --to-driver")
 	}
+	if *onlyDB != "" && *onlyDB != "metrics" && *onlyDB != "notifications" {
+		return fmt.Errorf("--db 只能是 metrics / notifications，当前为 %q", *onlyDB)
+	}
 	opts := migrate.Options{
 		DryRun: *dryRun,
 		Verify: *verify,
 		Sample: *sample,
+		OnlyDB: *onlyDB,
 		Logf:   func(format string, a ...any) { logger.Info(fmt.Sprintf(format, a...)) },
 	}
 	report, err := migrate.Run(context.Background(), from, to, opts)

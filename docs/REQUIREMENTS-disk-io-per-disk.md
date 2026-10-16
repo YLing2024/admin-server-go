@@ -111,9 +111,11 @@ I/O 被当成整机 I/O 展示**——根盘安静时显示 0，根盘一抖就�
    - `累计读 / 累计写` = 累计字节（复用 `fmtBytes`）
    - 卡片标题保持「磁盘 <mount>」不变。
 3. 趋势图（现「磁盘 I/O（/s）」）：改为**按盘分色**——每块盘各两条线（读 / 写），
-   legend 形如 `vda 读` / `vda 写` / `vdb 读` / `vdb 写`，数据取 `disk_io_<dev>_read|write` 列；
+   **本机两块盘 → 图上就是 4 根线**：`vda 读` / `vda 写` / `vdb 读` / `vdb 写`（legend 与颜色一一对应，
+   读/写用同色系深浅或 existing tone 体系区分，不得四根线撞色）。数据取 `disk_io_<dev>_read|write` 列；
    若这些列不存在（老数据或单盘环境）**回退**为合计两条线（`disk_io_read`/`disk_io_write`），不允许空白图。
-   卡片标题相应改为「磁盘 I/O（/s，按盘）」。三个粒度档位（秒/分钟/小时/天）都要正常。
+   卡片标题相应改为「磁盘 I/O（/s，按盘）」。三个粒度档位（秒/分钟/小时/天）都要正常，
+   **四个档位都必须能看到这 4 根线**。
 4. `src/api.ts` 的 `DiskInfo` 补 `device`、`read_rate`、`write_rate`、`read_bytes`、`write_bytes`（均选填）。
 5. 设计语言：B 端沿用 antd 默认 token，不引入新依赖、不加自定义色板；文案克制、禁 emoji。
 

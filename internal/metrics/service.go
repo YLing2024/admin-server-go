@@ -44,6 +44,10 @@ type Service struct {
 	stop     chan struct{}
 	stopOnce bool
 
+	// diskDevices 是启动时登记的按盘速率列设备集合；diskDevWarned 记录已就新设备告警过的名字。
+	diskDevices   map[string]bool
+	diskDevWarned map[string]bool
+
 	aggScheduled bool
 	samplerHeld  bool
 }
@@ -62,12 +66,18 @@ func New(opts Options) *Service {
 	if opts.Cfg != nil && opts.Cfg.ProcMaxRows > 0 {
 		maxRows = opts.Cfg.ProcMaxRows
 	}
+	diskDevices := map[string]bool{}
+	for _, dev := range store.DiskDevices() {
+		diskDevices[dev] = true
+	}
 	return &Service{
-		cfg:         opts.Cfg,
-		db:          opts.DB,
-		log:         log,
-		probe:       pr,
-		procMaxRows: maxRows,
+		cfg:           opts.Cfg,
+		db:            opts.DB,
+		log:           log,
+		probe:         pr,
+		procMaxRows:   maxRows,
+		diskDevices:   diskDevices,
+		diskDevWarned: map[string]bool{},
 	}
 }
 

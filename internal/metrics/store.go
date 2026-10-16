@@ -24,6 +24,9 @@ const (
 
 // HistoryPoint 是内存历史环形 buffer 的一个采样点。
 // 结构刻意不带内存绝对量（mem_used / mem_total），与旧 /history 接口的响应结构逐字段一致。
+//
+// DiskDev 承载按盘速率（键为 `disk_io_<dev>_read` / `disk_io_<dev>_write`），通过自定义 JSON
+// 编解码与固定字段平铺，使秒档趋势图也能按盘取列；键不存在表示该点没有该盘数据。
 type HistoryPoint struct {
 	TS          int64    `json:"ts"`
 	CPU         float64  `json:"cpu"`
@@ -36,6 +39,67 @@ type HistoryPoint struct {
 	NetTxRate   int64    `json:"net_tx_rate"`
 	DiskIORead  int64    `json:"disk_io_read"`
 	DiskIOWrite int64    `json:"disk_io_write"`
+
+	DiskDev map[string]int64 `json:"-"`
+}
+
+// historyPointAlias 是 HistoryPoint 的无方法镜像，供自定义编解码复用固定字段标签。
+type historyPointAlias HistoryPoint
+
+// MarshalJSON 输出固定字段，并把 DiskDev 的按盘速率键平铺到同一层。
+func (p HistoryPoint) MarshalJSON() ([]byte, error) {
+	base, err := json.Marshal(historyPointAlias(p))
+	if err != nil {
+		return nil, err
+	}
+	if len(p.DiskDev) == 0 {
+		return base, nil
+	}
+	obj := map[string]json.RawMessage{}
+	if err := json.Unmarshal(base, &obj); err != nil {
+		return nil, err
+	}
+	for k, v := range p.DiskDev {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		obj[k] = raw
+	}
+	return json.Marshal(obj)
+}
+
+// UnmarshalJSON 读取固定字段，并把 `disk_io_<dev>_read|write` 键收进 DiskDev。
+func (p *HistoryPoint) UnmarshalJSON(data []byte) error {
+	var alias historyPointAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*p = HistoryPoint(alias)
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	for k, raw := range obj {
+		if !isDiskDevMetricKey(k) {
+			continue
+		}
+		var v int64
+		if err := json.Unmarshal(raw, &v); err != nil {
+			continue
+		}
+		if p.DiskDev == nil {
+			p.DiskDev = map[string]int64{}
+		}
+		p.DiskDev[k] = v
+	}
+	return nil
+}
+
+// isDiskDevMetricKey 判定键是否为按盘速率列（排除合计列 disk_io_read / disk_io_write）。
+func isDiskDevMetricKey(k string) bool {
+	return strings.HasPrefix(k, "disk_io_") && k != "disk_io_read" && k != "disk_io_write" &&
+		(strings.HasSuffix(k, "_read") || strings.HasSuffix(k, "_write"))
 }
 
 // histState 是历史采样的差分基准与 EMA，单独成组便于一次性读写。
@@ -45,6 +109,8 @@ type histState struct {
 	cpuEmaInit bool
 	netPrev    *netBaseline
 	diskioPrev *diskioBaseline
+	// diskioDevPrev 是按设备的速率基线（与合计基线 diskioPrev 并存、互不影响）。
+	diskioDevPrev map[string]diskioBaseline
 }
 
 type cpuBaseline struct {
@@ -71,7 +137,12 @@ func (s *Service) sampleHistory() {
 	now := time.Now().UnixMilli()
 	cpuIdle, cpuTotal := probe.CPUSample()
 	netRx, netTx := probe.NetSample()
-	ioRead, ioWrite := probe.DiskIOSample()
+	diskAll := probe.DiskIOSampleAll()
+	ioRead, ioWrite := 0.0, 0.0
+	for _, st := range diskAll {
+		ioRead += st.ReadBytes
+		ioWrite += st.WriteBytes
+	}
 	psi := probe.PsiHistPoint()
 	mem := probe.ReadMeminfo()
 
@@ -112,6 +183,33 @@ func (s *Service) sampleHistory() {
 	h.netPrev = &netBaseline{ts: now, rx: netRx, tx: netTx}
 	h.diskioPrev = &diskioBaseline{ts: now, read: ioRead, write: ioWrite}
 
+	// 按设备速率：只对启动时已登记的设备产出列；运行中新出现的设备仅计入合计并记一条 warn。
+	devRates := map[string]int64{}
+	nextDev := make(map[string]diskioBaseline, len(diskAll))
+	if s.diskDevWarned == nil {
+		s.diskDevWarned = map[string]bool{}
+	}
+	for dev, cur := range diskAll {
+		nextDev[dev] = diskioBaseline{ts: now, read: cur.ReadBytes, write: cur.WriteBytes}
+		if !s.diskDevices[dev] {
+			if !s.diskDevWarned[dev] {
+				s.diskDevWarned[dev] = true
+				s.log.Warn("磁盘设备未登记按盘速率列，仅计入合计", "device", dev)
+			}
+			continue
+		}
+		var readRate, writeRate float64
+		if prev, ok := h.diskioDevPrev[dev]; ok {
+			if dt := float64(now-prev.ts) / 1000; dt > 0 {
+				readRate = maxf(0, (cur.ReadBytes-prev.read)/dt)
+				writeRate = maxf(0, (cur.WriteBytes-prev.write)/dt)
+			}
+		}
+		devRates["disk_io_"+dev+"_read"] = int64(round0(readRate))
+		devRates["disk_io_"+dev+"_write"] = int64(round0(writeRate))
+	}
+	h.diskioDevPrev = nextDev
+
 	point := HistoryPoint{
 		TS:          now,
 		CPU:         cpuPercent,
@@ -124,6 +222,7 @@ func (s *Service) sampleHistory() {
 		NetTxRate:   int64(round0(netTxRate)),
 		DiskIORead:  int64(round0(ioReadRate)),
 		DiskIOWrite: int64(round0(ioWriteRate)),
+		DiskDev:     devRates,
 	}
 
 	s.history = append(s.history, point)
@@ -181,20 +280,14 @@ func (s *Service) persistMetricPoint(point HistoryPoint, memUsed, memTotal float
 
 	cols := append([]string{"ts"}, store.MetricKeys...)
 	sqlText := s.db.Dialect().UpsertSQL("metrics", cols, []string{"ts"})
-	args := []any{
-		point.TS / 1000,
-		point.CPU,
-		point.MemPercent,
-		memUsed,
-		memTotal,
-		point.SwapPercent,
-		point.PsiMemAvg10,
-		point.PsiCPUAvg10,
-		point.PsiIOAvg10,
-		point.NetRxRate,
-		point.NetTxRate,
-		point.DiskIORead,
-		point.DiskIOWrite,
+	values := metricPointValues(point, memUsed, memTotal)
+	args := []any{point.TS / 1000}
+	for _, k := range store.MetricKeys {
+		if v, ok := values[k]; ok {
+			args = append(args, v)
+		} else {
+			args = append(args, nil)
+		}
 	}
 	if _, err := s.db.SQL.ExecContext(ctx, sqlText, args...); err != nil {
 		s.log.Warn("metrics.db 写入失败", "err", err)
@@ -204,6 +297,29 @@ func (s *Service) persistMetricPoint(point HistoryPoint, memUsed, memTotal float
 	if _, err := s.db.SQL.ExecContext(ctx, "DELETE FROM metrics WHERE ts < ?", cutoff); err != nil {
 		s.log.Warn("metrics.db 过期清理失败", "err", err)
 	}
+}
+
+// metricPointValues 把历史点摊平成「列名 → 值」，供动态列（含按盘速率）按 MetricKeys 取参。
+// 未命中的列写 NULL（老列在旧表里就是 NULL）。
+func metricPointValues(point HistoryPoint, memUsed, memTotal float64) map[string]any {
+	values := map[string]any{
+		"cpu":           point.CPU,
+		"mem_percent":   point.MemPercent,
+		"mem_used":      memUsed,
+		"mem_total":     memTotal,
+		"swap_percent":  point.SwapPercent,
+		"psi_mem_avg10": point.PsiMemAvg10,
+		"psi_cpu_avg10": point.PsiCPUAvg10,
+		"psi_io_avg10":  point.PsiIOAvg10,
+		"net_rx_rate":   point.NetRxRate,
+		"net_tx_rate":   point.NetTxRate,
+		"disk_io_read":  point.DiskIORead,
+		"disk_io_write": point.DiskIOWrite,
+	}
+	for k, v := range point.DiskDev {
+		values[k] = v
+	}
+	return values
 }
 
 // StartSampler 启动后台采样（每 5 秒一次）。用文件锁（ADMIN_SAMPLER_LOCK）保证多实例下

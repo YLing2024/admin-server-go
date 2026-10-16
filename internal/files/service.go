@@ -17,7 +17,19 @@ import (
 )
 
 // fileRootProtected 是根目录这一层的保护名单：既不展示、整棵子树也不允许写操作。
-// 与旧实现 FILE_ROOT_PROTECTED 一字不差。
+//
+// 前六项与旧实现 FILE_ROOT_PROTECTED 一字不差；以下新增项是本仓库的扩充约定，并非旧实现内容，
+// 因为持有后台会话仍可浏览/下载/误删根项，而其中多个目录存放密钥与凭据：
+//   - admin-server-go  后台自身配置（config.json 口令哈希）、审计日志与 data/
+//   - auth-server-go   认证中心私钥与共享令牌（oidc-keys.json、jwt-secret、internal-token 等）
+//   - chrome-shared    浏览器 profile，含 Cookie 与登录态等会话凭据
+//   - davbox-dev       明文口令与密钥（admin-password.txt、secret.key、accounts.json）
+//   - dbgate           .env 中的生产库口令与 docker-compose.yml
+//   - drop-forensics   凭据与取证数据（admin.json、key、blobs）
+//   - keygate-go       密钥网关运行数据（data/、hooks/）
+//   - legacy-sqlite-20261016.tar.gz  迁移前的旧库快照（历史业务数据）
+//
+// 判定规则与命名方案不变，仅扩充名单；后缀为文件（tarball）同样按根这一层的名字命中。
 var fileRootProtected = map[string]bool{
 	"swapfile":     true,
 	"lost+found":   true,
@@ -25,10 +37,22 @@ var fileRootProtected = map[string]bool{
 	"docker":       true,
 	".trash-queue": true,
 	"drop":         true,
+
+	"admin-server-go":               true,
+	"auth-server-go":                true,
+	"chrome-shared":                 true,
+	"davbox-dev":                    true,
+	"dbgate":                        true,
+	"drop-forensics":                true,
+	"keygate-go":                    true,
+	"legacy-sqlite-20261016.tar.gz": true,
 }
 
 // fileRootReadonly 是根目录这一层的收纳目录：正常展示、可浏览，但「根这一层的那一项」
-// 不允许被删/改名/移动，子路径照常读写。与旧实现 FILE_ROOT_READONLY 一字不差。
+// 不允许被删/改名/移动，子路径照常读写。
+//
+// 前若干项与旧实现 FILE_ROOT_READONLY 一字不差；blog-go、cloud、quotahub-go、super-productivity
+// 是本仓库新增的服务数据目录，登记为只读以避免根项被误删（子路径仍可正常读写）。
 var fileRootReadonly = map[string]bool{
 	"toolchains":      true,
 	"apps":            true,
@@ -50,6 +74,11 @@ var fileRootReadonly = map[string]bool{
 	"sftpgo":          true,
 	"authgw":          true,
 	"reminderweb":     true,
+
+	"blog-go":            true,
+	"cloud":              true,
+	"quotahub-go":        true,
+	"super-productivity": true,
 }
 
 // Options 是构造 Service 的依赖。

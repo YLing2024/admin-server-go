@@ -137,6 +137,126 @@ func TestIsHiddenRoot(t *testing.T) {
 	}
 }
 
+// listNames 列出一层目录下的条目名，供根项保护相关断言复用。
+func listNames(t *testing.T, s *Service, path string) []string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/files?path="+urlEscape(path), nil)
+	rr := httptest.NewRecorder()
+	s.FilesList(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list %q status = %d (%s)", path, rr.Code, rr.Body.String())
+	}
+	obj := decodeObject(t, rr.Body.Bytes())
+	entries := obj["entries"].([]any)
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.(map[string]any)["name"].(string))
+	}
+	return out
+}
+
+func hasName(names []string, want string) bool {
+	for _, n := range names {
+		if n == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestFileRootProtectionNames 把本轮约定的两张名单钉死：任何一项漏登记都会让用例变红。
+func TestFileRootProtectionNames(t *testing.T) {
+	protected := []string{
+		"admin-server-go", "auth-server-go", "chrome-shared", "davbox-dev",
+		"dbgate", "drop-forensics", "keygate-go", "legacy-sqlite-20261016.tar.gz",
+	}
+	for _, name := range protected {
+		if !fileRootProtected[name] {
+			t.Errorf("fileRootProtected 缺少 %q", name)
+		}
+	}
+	readonly := []string{"quotahub-go", "blog-go", "cloud", "super-productivity"}
+	for _, name := range readonly {
+		if !fileRootReadonly[name] {
+			t.Errorf("fileRootReadonly 缺少 %q", name)
+		}
+	}
+}
+
+// TestFileRootProtectedHidesAndBlocksWrites 验证受保护根项既不出现在列表里，写操作也被拒（含整棵子树）。
+func TestFileRootProtectedHidesAndBlocksWrites(t *testing.T) {
+	s, _ := newTestService(t)
+	dir := s.FileDir()
+	mustMkdir(t, filepath.Join(dir, "dbgate"))
+	mustWrite(t, filepath.Join(dir, "dbgate", ".env"), "MYSQL_PWD=placeholder")
+	mustWrite(t, filepath.Join(dir, "legacy-sqlite-20261016.tar.gz"), "archive")
+
+	names := listNames(t, s, "")
+	for _, hidden := range []string{"dbgate", "legacy-sqlite-20261016.tar.gz"} {
+		if hasName(names, hidden) {
+			t.Fatalf("受保护根项 %q 不应出现在列表: %v", hidden, names)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/files?path=dbgate", nil)
+	rr := httptest.NewRecorder()
+	s.FilesDelete(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("删除受保护根项 status = %d, want 403", rr.Code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dbgate", ".env")); err != nil {
+		t.Fatalf("受保护目录被删除: %v", err)
+	}
+
+	// 整棵子树禁写：向受保护目录上传同样被拒。
+	body, ct := multipartBody(t, "file", "x.txt", "x")
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/files/upload?path=dbgate", body)
+	req.Header.Set("Content-Type", ct)
+	rr = httptest.NewRecorder()
+	s.FilesUpload(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("向受保护子树上传 status = %d, want 403", rr.Code)
+	}
+}
+
+// TestFileRootReadonlyVisibleButRootImmutable 验证只读根项会展示，但根这一项禁止删除/改名，子路径照常读写。
+func TestFileRootReadonlyVisibleButRootImmutable(t *testing.T) {
+	s, _ := newTestService(t)
+	dir := s.FileDir()
+	mustMkdir(t, filepath.Join(dir, "quotahub-go", "data"))
+	mustWrite(t, filepath.Join(dir, "quotahub-go", "data", "a.txt"), "x")
+
+	if names := listNames(t, s, ""); !hasName(names, "quotahub-go") {
+		t.Fatalf("只读根项应出现在列表: %v", names)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/files?path=quotahub-go", nil)
+	rr := httptest.NewRecorder()
+	s.FilesDelete(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("删除只读根项 status = %d, want 403", rr.Code)
+	}
+
+	req = httpx.WithBody(httptest.NewRequest(http.MethodPost, "/api/admin/files/rename", nil),
+		map[string]any{"path": "quotahub-go", "name": "renamed-go"})
+	rr = httptest.NewRecorder()
+	s.FilesRename(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("改名只读根项 status = %d, want 403", rr.Code)
+	}
+
+	req = httpx.WithBody(httptest.NewRequest(http.MethodPost, "/api/admin/files/rename", nil),
+		map[string]any{"path": "quotahub-go/data/a.txt", "name": "b.txt"})
+	rr = httptest.NewRecorder()
+	s.FilesRename(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("改名只读根项子路径 status = %d (%s)", rr.Code, rr.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "quotahub-go", "data", "b.txt")); err != nil {
+		t.Fatalf("子路径改名未生效: %v", err)
+	}
+}
+
 func TestSanitizeSegmentAndExtname(t *testing.T) {
 	sanitize := []struct{ in, want string }{
 		{"a/b.txt", "b.txt"},

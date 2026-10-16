@@ -45,7 +45,10 @@
 
 指标列（raw 与三个物化桶共用）：`cpu` / `mem_percent` / `mem_used` / `mem_total` / `swap_percent` /
 `psi_mem_avg10` / `psi_cpu_avg10` / `psi_io_avg10` / `net_rx_rate` / `net_tx_rate` / `disk_io_read` /
-`disk_io_write`。物化桶另有 `sample_count` / `updated_at`。
+`disk_io_write`（固定 12 列，后两列是**全部整盘合计**速率），之后**按启动时探测到的每块整盘**追加
+`disk_io_<device>_read` / `disk_io_<device>_write`（`device` 为 `/proc/diskstats` 整盘名，按字典序稳定；
+分区的流量含在整盘里）。设备集在服务启动时探测一次并由 `store.SetDiskDevices` 写进 `MetricKeys`；运行中
+新出现的设备只计入合计列，不新增列。物化桶另有 `sample_count` / `updated_at`。
 
 > 通知 `id` 是 MySQL `BIGINT AUTO_INCREMENT`，**不是**雪花 ID；项目级约定「雪花 ID 一律字符串」在本服务
 > 无对应字段（`/api/blog/*` 由别的后端提供）。
@@ -56,7 +59,9 @@
   886k 行的指标表尤其不做整表重写。
 - 补列前先探测列是否存在：查询 `information_schema.columns`（限定 `DATABASE()`）。
 - **老库原地升级**：旧通知库缺 `type` 列 → 加列并 `UPDATE ... SET type = source WHERE type IS NULL` 回填；
-  旧指标库缺三个物化表 → `CREATE TABLE IF NOT EXISTS` 补建。都不动已有数据。
+  旧指标库缺三个物化表 → `CREATE TABLE IF NOT EXISTS` 补建；旧指标表缺按盘速率列 → 逐表逐列
+  `information_schema.columns` 探测后 `ALTER TABLE ... ADD COLUMN ... DOUBLE` 补列（旧行新列为 NULL，
+  读取按缺失处理）。都不动已有数据。
 - MySQL 无 `CREATE INDEX IF NOT EXISTS`：重复建索引的 `Duplicate key name` 直接忽略。
 - 预置通知类别（`watchdog` / `monitor` / `cron` / `hermes` / `admin`）用 `INSERT IGNORE`，不覆盖用户改动。
 

@@ -104,7 +104,11 @@
   "memory": { "percent": 47, "used": 7239, "available": 8000, "buffCache": 2100, "free": 1000, "total": 16000,
               "swapTotal": 0, "swapUsed": 0, "swapFree": 0, "swapPercent": 0, "zram": null },
   "disk": { "mount": "/", "used": 120, "total": 500, "free": 380, "percent": 24 },
-  "disks": [ { "mount": "/", "percent": 24 } ],
+  "disks": [
+    { "filesystem": "/dev/vda1", "mount": "/", "device": "vda", "percent": 24,
+      "total": 500, "used": 120, "free": 380,
+      "read_rate": 0, "write_rate": 0, "read_bytes": 0, "write_bytes": 0 }
+  ],
   "network": { "rx_rate": 1024, "tx_rate": 512, "rx_bytes": 0, "tx_bytes": 0 },
   "disk_io": { "read_rate": 0, "write_rate": 0, "read_bytes": 0, "write_bytes": 0 },
   "processes": { "running": 1, "total": 344 },
@@ -120,6 +124,20 @@
   | 401 | 未登录 / 会话失效 |
   | 500 | `{ "error": "获取系统信息失败: …" }` |
 
+- `disks[]` 单盘字段：
+
+  | 字段 | 类型 | 语义 |
+  |---|---|---|
+  | `mount` | string | 挂载点 |
+  | `filesystem` | string | `df` 报出的设备路径（如 `/dev/vda1`） |
+  | `device` | string | 基础设备名（与 `/proc/diskstats` 对齐）：`/dev/vda1`→`vda`、`/dev/nvme0n1p1`→`nvme0n1`、`/dev/mapper/x`→`x`；无法映射为 `""` |
+  | `total` / `used` / `free` | number | 字节（`df -kP` × 1024） |
+  | `percent` | number | 使用百分比（整数） |
+  | `read_rate` / `write_rate` | number | 该设备读写速率（字节/秒；首次采样为 0） |
+  | `read_bytes` / `write_bytes` | number | 该设备累计读写字节 |
+
+- 速率口径：`disk_io`（全部整盘合计）、`disks[].read_rate/write_rate`、`network` 的速率**同源于唯一的 1s 后台采样快照**，
+  不随请求次数重置（多客户端 / 多标签 / SSE 并发读到的是一致的数值）；快照尚未产出时速率一律 `0`。磁盘累计字节按设备名判定整盘，分区（`vda1`、`nvme0n1p1`）不计入。
 - 副作用：同步写入历史采样 buffer（趋势图数据源）。幂等：是。限流：无。
 
 ### GET /api/admin/system/history
@@ -127,7 +145,9 @@
 - 鉴权：`authRequired`
 - 请求参数：无
 - curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/system/history"`
-- 成功 200：环形 buffer 中的采样点数组（最多约 120 点）`[{ "ts": <epoch ms>, "cpu": …, "mem_percent": …, … }]`；无数据为 `[]`
+- 成功 200：环形 buffer 中的采样点数组（最多约 120 点）`[{ "ts": <epoch ms>, "cpu": …, "mem_percent": …, …, "disk_io_read": …, "disk_io_write": …, "disk_io_vda_read": …, "disk_io_vda_write": … }]`；无数据为 `[]`。
+  除固定列外，还带每块整盘的速率键 `disk_io_<device>_read` / `disk_io_<device>_write`（`device` 同 `disks[].device`）；
+  老采样点缺这些键时视为缺失，前端自行回退。
 - 错误：401
 - 副作用：无；幂等：是；限流：无
 
@@ -142,7 +162,8 @@
   | `step` | query | string | 否 | `1m` | `1m`/`5m`/`1h`/`1d` 之一，未知值回退 `1m` |
 
 - curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/system/metrics?range=1d&step=1m"`
-- 成功 200：`{ "step": "1m", "range": "1d", "points": [{ "ts": <epoch ms>, … }], "meta": { "step": "1m", "range": "1d", "bucketCount": 0, "firstBucket": null, "lastBucket": null, "recordedSeconds": 0 } }`；无数据/单点也返回结构完整的 200（`points` 可为空/单点）
+- 成功 200：`{ "step": "1m", "range": "1d", "points": [{ "ts": <epoch ms>, … }], "meta": { "step": "1m", "range": "1d", "bucketCount": 0, "firstBucket": null, "lastBucket": null, "recordedSeconds": 0 } }`；无数据/单点也返回结构完整的 200（`points` 可为空/单点）。
+  每个点含固定指标列 + 每块整盘的 `disk_io_<device>_read` / `disk_io_<device>_write` 列；老数据点缺这些列时值为 `null`（前端按缺失处理，可回退合计列）。
 - 错误：401；查询失败不 500，降级为空 `points` + 完整 `meta`
 - 副作用：无；幂等：是；限流：无
 

@@ -81,6 +81,8 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	defer func() { _ = redis.Close() }()
 
 	probeSvc := probe.New(cfg, logger)
+	// 整盘设备集在建表/迁移前探测并登记，MetricKeys 才会带上按盘速率列。
+	store.SetDiskDevices(probe.WholeDiskDevices())
 
 	metricsDB, err := openDB(ctx, cfg, "metrics")
 	if err != nil {
@@ -136,10 +138,11 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	}()
 
 	// 后台任务在 listen 成功后启动（对齐旧实现 index.ts 的 listen 回调）。
+	probeSvc.StartRateSampler()
 	metricsSvc.StartSampler()
 	notifSvc.StartMaintenance()
 
-	return waitForShutdown(server, metricsSvc, logger)
+	return waitForShutdown(server, metricsSvc, probeSvc, logger)
 }
 
 // openDB 打开一个逻辑库（metrics / notifications）并跑增量迁移。
@@ -157,7 +160,7 @@ func openDB(ctx context.Context, cfg *config.Config, logical string) (*store.DB,
 }
 
 // waitForShutdown 优雅退出：停采样器 → 关 HTTP。
-func waitForShutdown(server *http.Server, metricsSvc *metrics.Service, logger *slog.Logger) error {
+func waitForShutdown(server *http.Server, metricsSvc *metrics.Service, probeSvc *probe.Service, logger *slog.Logger) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-signals
@@ -165,6 +168,9 @@ func waitForShutdown(server *http.Server, metricsSvc *metrics.Service, logger *s
 
 	if metricsSvc != nil {
 		metricsSvc.Stop()
+	}
+	if probeSvc != nil {
+		probeSvc.StopRateSampler()
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

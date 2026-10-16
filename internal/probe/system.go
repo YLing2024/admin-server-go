@@ -3,7 +3,9 @@ package probe
 import (
 	"math"
 	"os"
+	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -56,45 +58,86 @@ func NetSample() (rx, tx float64) {
 	return rx, tx
 }
 
-// DiskIOSample 读 /proc/diskstats，累加主盘设备（sd[a-z]/vd[a-z]/hd[a-z]，不含分区）的
-// 扇区读/写（第 6、10 列）×512，得到累计字节。
-func DiskIOSample() (read, write float64) {
+// DiskIOStat 是一块整盘的累计读写字节数（读 / 写各一）。
+type DiskIOStat struct {
+	ReadBytes  float64
+	WriteBytes float64
+}
+
+// wholeDiskPattern 匹配整盘设备名：sd[a-z]+ / vd[a-z]+ / hd[a-z]+ / nvme\d+n\d+ /
+// mmcblk\d+ / md\d+ / dm-\d+。分区名（vda1、nvme0n1p1、mmcblk0p1、dm-0p1…）因锚定结尾自然不匹配。
+var wholeDiskPattern = regexp.MustCompile(`^(?:sd[a-z]+|vd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+|md\d+|dm-\d+)$`)
+
+// isWholeDisk 按设备名判定是否为整盘（而非分区）。旧实现用「minor == 0」判断，
+// 对 virtio 的 vdb（minor=16）等会整块漏掉，故一律按名判定。
+func isWholeDisk(name string) bool {
+	return wholeDiskPattern.MatchString(name)
+}
+
+// DiskIOSampleAll 读 /proc/diskstats，按设备名逐块累加整盘的扇区读/写（第 6、10 列）×512，
+// 返回「设备名 → 累计读写字节」。分区被排除，避免与整盘重复计数。
+func DiskIOSampleAll() map[string]DiskIOStat {
 	data, err := os.ReadFile("/proc/diskstats")
 	if err != nil {
-		return 0, 0
+		return map[string]DiskIOStat{}
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	return parseDiskIOAll(string(data))
+}
+
+// parseDiskIOAll 是 DiskIOSampleAll 的纯解析部分，便于以固定夹具做单测。
+func parseDiskIOAll(content string) map[string]DiskIOStat {
+	out := map[string]DiskIOStat{}
+	for _, line := range strings.Split(content, "\n") {
 		cols := splitFields(line)
-		if len(cols) < 11 {
+		if len(cols) < 10 {
 			continue
 		}
 		name := cols[2]
 		if !isWholeDisk(name) {
 			continue
 		}
-		// 分区 minor > 0：同一物理盘的分区与整盘会重复计数，只保留整盘。
-		if int(atof(cols[1])) != 0 {
-			continue
-		}
-		read += atof(cols[5]) * 512
-		write += atof(cols[9]) * 512
+		stat := out[name]
+		stat.ReadBytes += atof(cols[5]) * 512
+		stat.WriteBytes += atof(cols[9]) * 512
+		out[name] = stat
 	}
-	return read, write
+	return out
 }
 
-func isWholeDisk(name string) bool {
-	if len(name) != 3 {
-		return false
+// WholeDiskDevices 列出当前全部整盘设备名（按字典序）。服务启动时探测一次，
+// 用于生成 metrics 的按盘速率列；运行中新出现的设备只计入合计，不再新增列。
+func WholeDiskDevices() []string {
+	data, err := os.ReadFile("/proc/diskstats")
+	if err != nil {
+		return nil
 	}
-	switch name[0] {
-	case 's', 'v', 'h':
-	default:
-		return false
+	return wholeDiskDevicesFrom(string(data))
+}
+
+// wholeDiskDevicesFrom 是 WholeDiskDevices 的纯解析部分。
+func wholeDiskDevicesFrom(content string) []string {
+	seen := map[string]bool{}
+	for _, line := range strings.Split(content, "\n") {
+		cols := splitFields(line)
+		if len(cols) < 3 {
+			continue
+		}
+		if isWholeDisk(cols[2]) {
+			seen[cols[2]] = true
+		}
 	}
-	if name[1] != 'd' {
-		return false
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
 	}
-	return name[2] >= 'a' && name[2] <= 'z'
+	sort.Strings(out)
+	return out
+}
+
+// DiskIOSample 返回全部整盘的 (读, 写) 累计字节之和（合计口径，供历史合计列与兼容字段使用）。
+func DiskIOSample() (read, write float64) {
+	total := sumDiskIO(DiskIOSampleAll())
+	return total.ReadBytes, total.WriteBytes
 }
 
 /* ============ 每核 CPU 占用 ============ */
@@ -186,6 +229,10 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 	if mem.Total > 0 {
 		percent = round1((mem.Used / mem.Total) * 100)
 	}
+	// 速率只读后台快照（唯一来源）；累计字节与速率同源，避免同一响应内两个时刻混用。
+	snap := s.currentRateSnapshot()
+	disks := getDisks()
+	applyDiskRates(disks, snap)
 	return map[string]any{
 		"cpu": s.getCPUInfo(),
 		"memory": map[string]any{
@@ -202,9 +249,9 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 			"zram":        getZram(),
 		},
 		"disk":      getDisk(),
-		"disks":     getDisks(),
-		"network":   s.getNetInfo(),
-		"disk_io":   s.getDiskIoInfo(),
+		"disks":     disks,
+		"network":   networkInfo(snap),
+		"disk_io":   diskIoInfo(snap),
 		"processes": getProcesses(),
 		"psi":       readPressure(),
 		"uptime":    uptimeSeconds(),
@@ -213,45 +260,40 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 	}, nil
 }
 
-/* ============ 网络 / 磁盘 I/O 速率 ============ */
+/* ============ 网络 / 磁盘 I/O 速率（只读快照） ============ */
 
-// getNetInfo 本次与上次采样做差，按时间差换算字节/秒；首次请求速率返回 0。
-// 调用方必须已持有 s.mu。
-func (s *Service) getNetInfo() map[string]any {
-	rx, tx := NetSample()
-	now := nowMillis()
-	dt := float64(now-s.netState.ts) / 1000
-	info := map[string]any{
-		"rx_bytes": rx,
-		"tx_bytes": tx,
-		"rx_rate":  0.0,
-		"tx_rate":  0.0,
+// networkInfo 从速率快照取网络累计字节与速率；快照未产出时一律为 0（不返回 NaN）。
+func networkInfo(snap rateSnapshot) map[string]any {
+	return map[string]any{
+		"rx_bytes": snap.netBytes.rx,
+		"tx_bytes": snap.netBytes.tx,
+		"rx_rate":  snap.netRate.rx,
+		"tx_rate":  snap.netRate.tx,
 	}
-	if s.netState.ts != 0 && dt > 0 {
-		info["rx_rate"] = math.Max(0, (rx-s.netState.rx)/dt)
-		info["tx_rate"] = math.Max(0, (tx-s.netState.tx)/dt)
-	}
-	s.netState = netState{ts: now, rx: rx, tx: tx}
-	return info
 }
 
-// getDiskIoInfo 同上，返回读写速率（字节/秒）。调用方必须已持有 s.mu。
-func (s *Service) getDiskIoInfo() map[string]any {
-	read, write := DiskIOSample()
-	now := nowMillis()
-	dt := float64(now-s.diskioState.ts) / 1000
-	info := map[string]any{
-		"read_bytes":  read,
-		"write_bytes": write,
-		"read_rate":   0.0,
-		"write_rate":  0.0,
+// diskIoInfo 从速率快照取合计读写累计字节与速率；快照未产出时一律为 0。
+func diskIoInfo(snap rateSnapshot) map[string]any {
+	return map[string]any{
+		"read_bytes":  snap.diskTotalBytes.ReadBytes,
+		"write_bytes": snap.diskTotalBytes.WriteBytes,
+		"read_rate":   snap.diskTotalRate.ReadBytes,
+		"write_rate":  snap.diskTotalRate.WriteBytes,
 	}
-	if s.diskioState.ts != 0 && dt > 0 {
-		info["read_rate"] = math.Max(0, (read-s.diskioState.read)/dt)
-		info["write_rate"] = math.Max(0, (write-s.diskioState.write)/dt)
+}
+
+// applyDiskRates 把快照里的按设备累计字节与速率写进 disks[] 每项；
+// 设备名缺失或在快照中不存在时保持 0（首次采样速率即为 0）。
+func applyDiskRates(disks []map[string]any, snap rateSnapshot) {
+	for _, d := range disks {
+		dev, _ := d["device"].(string)
+		bytes := snap.diskBytes[dev]
+		rate := snap.diskRate[dev]
+		d["read_rate"] = rate.ReadBytes
+		d["write_rate"] = rate.WriteBytes
+		d["read_bytes"] = bytes.ReadBytes
+		d["write_bytes"] = bytes.WriteBytes
 	}
-	s.diskioState = diskioState{ts: now, read: read, write: write}
-	return info
 }
 
 /* ============ 进程数 / 主机信息 ============ */

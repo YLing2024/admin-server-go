@@ -24,8 +24,13 @@ type Service struct {
 	// 会并发调用，必须显式串行化，避免差分基准被并发请求撕裂成乱值。
 	mu sync.Mutex
 
-	netState    netState
-	diskioState diskioState
+	// rateMu 保护「最近一次速率快照」与采样循环生命周期（见 rates.go）。快照是 REST 与 SSE
+	// 唯一的速率来源，由 StartRateSampler 起的唯一后台循环写入，读取方只读、不各自做差。
+	rateMu      sync.RWMutex
+	rateSnap    rateSnapshot
+	ratePrev    rateCounters
+	rateStop    chan struct{}
+	rateStarted bool
 
 	// cpuPerCorePrev 是上一次每核 (total, idle)，用于算每核占用。nil 表示尚无基线。
 	cpuPerCorePrev map[int]coreTicks
@@ -36,20 +41,6 @@ type Service struct {
 	procCpuEma    map[int]float64
 	totalEmaPrev  float64
 	totalEmaInit  bool
-}
-
-// netState 记录上一次网络累计字节与采样时刻，用于算速率。
-type netState struct {
-	ts int64
-	rx float64
-	tx float64
-}
-
-// diskioState 记录上一次磁盘读写累计字节与采样时刻。
-type diskioState struct {
-	ts    int64
-	read  float64
-	write float64
 }
 
 // coreTicks 是单个核的累计时钟滴答（内核口径）。

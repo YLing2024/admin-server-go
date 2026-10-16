@@ -103,11 +103,31 @@ var notificationsDDL = []string{
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 }
 
-// MigrateMetrics 建指标 raw 表与三个物化桶（幂等）。
+// MigrateMetrics 建指标 raw 表与三个物化桶（幂等），并为老表补齐 MetricKeys 里新增的列。
+// 只做 ADD COLUMN，绝不重建表、绝不丢旧行；旧行新列为 NULL。
 func (d *Dialect) MigrateMetrics(ctx context.Context, db *sql.DB) error {
 	for _, stmt := range metricsDDL() {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("执行指标建表语句失败: %w", err)
+		}
+	}
+	tables := make([]string, 0, len(store.AggTables)+1)
+	tables = append(tables, "metrics")
+	for _, agg := range store.AggTables {
+		tables = append(tables, agg.Table)
+	}
+	for _, table := range tables {
+		for _, col := range store.MetricKeys {
+			exists, err := d.ColumnExists(ctx, db, table, col)
+			if err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+			if _, err := db.ExecContext(ctx, "ALTER TABLE "+quoteIdent(table)+" ADD COLUMN "+quoteIdent(col)+" DOUBLE"); err != nil {
+				return fmt.Errorf("补 %s.%s 列失败: %w", table, col, err)
+			}
 		}
 	}
 	return nil

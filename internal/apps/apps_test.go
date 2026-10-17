@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -560,5 +561,54 @@ func TestPublicApps_Handlers(t *testing.T) {
 	}
 	if body["error"] != "应用数据暂不可用" {
 		t.Errorf("error=%v", body["error"])
+	}
+}
+
+/* ============ 顶层键顺序 ============ */
+
+// topLevelKeyOrder 从原始 JSON 中按出现顺序取出顶层键（map 会丢顺序，必须走流式解码）。
+func topLevelKeyOrder(t *testing.T, raw []byte) []string {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		t.Fatalf("期望对象，得到 %v", tok)
+	}
+	var keys []string
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, keyTok.(string))
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return keys
+}
+
+// TestCollectPayloadKeyOrder 断言 apps 载荷顶层键顺序与旧实现一致：旧实现在 collectOnce
+// 结果上展开 `{ ...payload, cached }`，故 cached 永远排在最后（不是第二个）。
+func TestCollectPayloadKeyOrder(t *testing.T) {
+	p := collectPayload{
+		GeneratedAt:  "2026-01-01T00:00:00.000Z",
+		TTLSeconds:   10,
+		RegistryPath: "/internal/data/apps.json",
+		Categories:   []CategoryAgg{},
+		Apps:         []AppView{},
+		Discovered:   []DiscoveredEntry{},
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"generatedAt", "ttlSeconds", "registryPath", "registryMtime", "notice", "warning", "categories", "apps", "discovered", "cached"}
+	if got := topLevelKeyOrder(t, b); !reflect.DeepEqual(got, want) {
+		t.Fatalf("顶层键顺序 = %v, want %v", got, want)
 	}
 }

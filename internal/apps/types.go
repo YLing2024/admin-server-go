@@ -93,9 +93,12 @@ type CategoryAgg struct {
 }
 
 // collectPayload 是一次完整采集的返回载荷。
+//
+// 字段顺序即 JSON 键顺序，必须与旧实现 res.json 一致：旧实现在 collectOnce 结果上
+// 展开 `{ ...payload, cached }`，故 cached 永远排在最后（discovered 之后）。cached 本身
+// 是旧实现响应的一部分（命中 10s 缓存 true，否则 false），不能删。
 type collectPayload struct {
 	GeneratedAt   string            `json:"generatedAt"`
-	Cached        bool              `json:"cached"`
 	TTLSeconds    int               `json:"ttlSeconds"`
 	RegistryPath  string            `json:"registryPath"`
 	RegistryMtime *float64          `json:"registryMtime"`
@@ -104,6 +107,7 @@ type collectPayload struct {
 	Categories    []CategoryAgg     `json:"categories"`
 	Apps          []AppView         `json:"apps"`
 	Discovered    []DiscoveredEntry `json:"discovered"`
+	Cached        bool              `json:"cached"`
 }
 
 /* ============ JS 语义小工具（登记表是外部输入，逐字段按旧实现归一化） ============ */

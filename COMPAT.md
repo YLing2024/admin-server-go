@@ -58,9 +58,24 @@ Express 默认给响应体算弱 `ETag`（`W/"<len>-<hash>"`）并支持条件�
 - 验收样例（Node 24.19.0 实测真值）：`.hidden < 啊.txt < 带空格 的.txt < 中文名.md < a.txt < blob.bin < z.txt`，
   目录优先后为 `sub` 置顶；本仓库输出与之逐字节一致。
 
+### 3. 两处「验收真值与旧实现实测相反」的判定（以旧实现实测为准）
+
+验收方给出的 ①–⑤ 真值里有两处与本仓库对旧实现的实测不一致，均已按**旧实现实测**复刻，
+此处留证，便于逐条核对：
+
+1. **`OPTIONS /api/admin/apps` 无 `X-Auth-User`**：验收真值记为 `401 {"error":"未登录"}`（认为鉴权先于方法回退）；
+   旧实现实测为 **`200` + `Allow: GET,HEAD`**。原因是 Express 的路由层对未命中方法的 `OPTIONS` 直接由
+   router 生成默认响应（`sendOptionsResponse`），**根本不会进入该路由的 `authRequired` 中间件**，故鉴权
+   没有机会先跑。本仓库复刻为：OPTIONS 自动 Allow 响应免鉴权（`docs/API.md` §方法回退已写明）。
+   实测命令：`curl -s -i -X OPTIONS http://127.0.0.1:3100/api/admin/apps` → `200` / `Allow: GET,HEAD` / 体 `GET,HEAD`。
+2. **`cached` 字段**：验收真值记为「旧实现没有、新版多出」；旧实现实测**有** `cached`。
+   旧 `src/apps.ts` 的 `createCollector().getPayload()` 恒返回 `{ ...collectOnce(), cached }`（命中 10s 缓存
+   `true`，否则 `false`），故该字段属于旧实现响应契约，不能删。本仓库保留它，并把它放在**与旧实现相同的
+   位置（顶层最后一个键，`discovered` 之后）**，以支持逐字节比对。
+
 ## 三、验收口径
 
 - ①②③④ 四条修复的自测矩阵与原始输出见交付报告。
-- 「已一致」的端点（`notifications` 三端点、坏 JSON 500 文案、`cached`/`registryMtime` 等）不再复述。
+- 「已一致」的端点（`notifications` 三端点、坏 JSON 500 文案、`registryMtime` 等）不再复述。
 - 活体采样类字段（`apps`/`services`/`system` 的内存、CPU、网络计数、`latencyMs`）因采样时刻不同天然有差异，
   不属于契约差异。

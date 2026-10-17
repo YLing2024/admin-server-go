@@ -54,7 +54,7 @@ type DB struct {
 // Dialect 返回当前方言。
 func (db *DB) Dialect() Dialect { return db.dialect }
 
-// Open 打开数据库并跑指定迁移。maxOpenConns 对 SQLite 场景取 1，避免写锁竞争。
+// Open 打开数据库并跑指定迁移。maxOpenConns 为连接池上限（MySQL 取 16）。
 func Open(ctx context.Context, dialect Dialect, dsn string, maxOpenConns int, migrate func(context.Context, *sql.DB) error) (*DB, error) {
 	sqlDB, err := sql.Open(dialect.DriverName(), dsn)
 	if err != nil {

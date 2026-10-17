@@ -3,6 +3,7 @@
 package term
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -18,7 +19,6 @@ import (
 
 	"admin-server-go/internal/config"
 	"admin-server-go/internal/httpx"
-	"admin-server-go/internal/state"
 	"admin-server-go/internal/util"
 
 	"log/slog"
@@ -37,17 +37,23 @@ const (
 // sessionRe 是 tmux 会话名白名单：term- 前缀 + 小写字母/数字/短横，杜绝命令注入。
 var sessionRe = regexp.MustCompile(`^term-[a-z0-9][a-z0-9-]{0,31}$`)
 
+// TicketStore 是终端票据所需的 Redis 子集。*state.Client 满足它，单测可注入内存实现。
+type TicketStore interface {
+	Get(ctx context.Context, key string) (string, error)
+	Set(ctx context.Context, key, value string, ttlSeconds int) error
+}
+
 // Options 是装配参数。
 type Options struct {
 	Cfg   *config.Config
-	Redis *state.Client
+	Redis TicketStore
 	Log   *slog.Logger
 }
 
 // Service 提供终端相关 handler。
 type Service struct {
 	cfg    *config.Config
-	redis  *state.Client
+	redis  TicketStore
 	log    *slog.Logger
 	mu     sync.Mutex
 	unlock map[string]*unlockState
@@ -65,8 +71,31 @@ func New(opts Options) *Service {
 }
 
 // Unlock 校验终端口令，成功后下发 12h 票据。
+// ADMIN_TERM_UNLOCK=off 时跳过口令校验与失败计数，直接走成功分支（响应结构与成功路径完全一致）；
+// 管理端鉴权仍由路由层的 authRequired 强制（两道门里的第一道不受本开关影响）。
 func (s *Service) Unlock(w http.ResponseWriter, r *http.Request) {
 	ip := util.ClientIP(r)
+	if s.cfg.TermUnlock != config.TermUnlockOff {
+		if !s.verifyPassword(w, r, ip) {
+			return
+		}
+	}
+	ticket, err := randomHex(32)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "票据存储失败: "+err.Error())
+		return
+	}
+	if err := s.redis.Set(r.Context(), ticketPrefix+util.Sha256Hex(ticket), "1", ticketTTL); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "票据存储失败: "+err.Error())
+		return
+	}
+	util.Audit(s.cfg.AuditLog, "term_unlock_ok", ip, true, "")
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ticket": ticket, "expiresIn": ticketTTL})
+}
+
+// verifyPassword 处理口令模式下的锁定判定与口令校验：通过返回 true；
+// 未通过时已写出 401/429 响应并返回 false。口令模式的错误文案与限流语义保持现状。
+func (s *Service) verifyPassword(w http.ResponseWriter, r *http.Request, ip string) bool {
 	now := s.now().UnixMilli()
 	s.mu.Lock()
 	st := s.unlock[ip]
@@ -78,7 +107,7 @@ func (s *Service) Unlock(w http.ResponseWriter, r *http.Request) {
 		remain := int((st.until - now + 999) / 1000)
 		s.mu.Unlock()
 		httpx.WriteJSON(w, http.StatusTooManyRequests, map[string]any{"error": "尝试过多，请稍后再试", "retryAfter": remain})
-		return
+		return false
 	}
 	body := httpx.Body(r)
 	pw := httpx.BodyString(body, "password")
@@ -92,23 +121,17 @@ func (s *Service) Unlock(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		util.Audit(s.cfg.AuditLog, "term_unlock_fail", ip, false, fmt.Sprintf("fails=%d", fails))
 		httpx.Error(w, http.StatusUnauthorized, "口令不正确")
-		return
+		return false
 	}
 	st.fails = 0
 	st.until = 0
 	s.mu.Unlock()
+	return true
+}
 
-	ticket, err := randomHex(32)
-	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "票据存储失败: "+err.Error())
-		return
-	}
-	if err := s.redis.Set(r.Context(), ticketPrefix+util.Sha256Hex(ticket), "1", ticketTTL); err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "票据存储失败: "+err.Error())
-		return
-	}
-	util.Audit(s.cfg.AuditLog, "term_unlock_ok", ip, true, "")
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ticket": ticket, "expiresIn": ticketTTL})
+// Mode 供前端在进入终端前探测是否需要口令（ADMIN_TERM_UNLOCK=off → false）。
+func (s *Service) Mode(w http.ResponseWriter, r *http.Request) {
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"unlockRequired": s.cfg.TermUnlock != config.TermUnlockOff})
 }
 
 // Verify 供服务端 wrapper 起 shell 前调用；只允许本机来源。

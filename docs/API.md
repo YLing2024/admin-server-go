@@ -749,6 +749,16 @@
 - 成功 200：`{ "ticket": "<64 位 hex>", "expiresIn": 43200 }`
 - 错误码：401 口令不正确；429 同 IP 连续失败 5 次锁 10 分钟（附 `retryAfter` 秒）；500 `{ "error": "票据存储失败: …" }`
 - 副作用：写 Redis 票据（12 小时）、写审计；幂等：否；限流：**是**（5 次失败锁 10 分钟 / IP）
+- 开关：`ADMIN_TERM_UNLOCK=off` 时跳过口令校验与失败计数（不再有 401/429），直接签发同样结构的票据；`authRequired` 不变，管理端鉴权仍是必经的第一道门
+
+### GET /api/admin/term/mode
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/term/mode"`
+- 成功 200：`{ "unlockRequired": true }`（`ADMIN_TERM_UNLOCK=off` 时为 `false`）
+- 错误码：401 未登录
+- 副作用：无（只读启动配置快照）；幂等：是；限流：无
 
 ### GET /api/admin/term/verify
 

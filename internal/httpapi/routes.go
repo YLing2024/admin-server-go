@@ -76,6 +76,7 @@ func (s *Server) routeTable() []apiRoute {
 
 		// ⑥ term
 		{pattern: "POST /api/admin/term/unlock", auth: authRequired, handler: s.term.Unlock},
+		{pattern: "GET /api/admin/term/mode", auth: authRequired, handler: s.term.Mode},
 		{pattern: "GET /api/admin/term/verify", handler: s.term.Verify},
 		{pattern: "GET /api/admin/term/sessions", auth: authRequired, handler: s.term.ListSessions},
 		{pattern: "POST /api/admin/term/sessions/close", auth: authRequired, handler: s.term.CloseSessions},

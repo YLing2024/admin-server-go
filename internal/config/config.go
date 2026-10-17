@@ -9,6 +9,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +27,17 @@ const (
 	AuthSSO AuthMode = "sso"
 )
 
+// TermUnlockMode 是终端口令门开关（ADMIN_TERM_UNLOCK）。管理端鉴权是两道门里的第一道，
+// 本开关只决定第二道（终端口令）是否保留，不改变任何 HTTP 契约。
+type TermUnlockMode string
+
+const (
+	// TermUnlockPassword 要求终端口令换取票据（默认，与旧实现一致）。
+	TermUnlockPassword TermUnlockMode = "password"
+	// TermUnlockOff 不要求终端口令：通过管理端鉴权后直接签发票据。
+	TermUnlockOff TermUnlockMode = "off"
+)
+
 // Config 是启动时确定的运行时配置快照（不含 config.json 的可变内容，后者见 FileStore）。
 type Config struct {
 	// RepoRoot 是默认相对路径的解析基准（进程工作目录，与旧实现 __dirname/.. 等价）。
@@ -35,12 +47,14 @@ type Config struct {
 	Port     int
 	AuthMode AuthMode
 
-	ConfigPath   string
-	UploadDir    string
-	FileDir      string
-	AppsFile     string
-	AuditLog     string
-	TermPwFile   string
+	ConfigPath string
+	UploadDir  string
+	FileDir    string
+	AppsFile   string
+	AuditLog   string
+	TermPwFile string
+	// TermUnlock 决定 POST /api/admin/term/unlock 是否校验终端口令（默认 password）。
+	TermUnlock   TermUnlockMode
 	ShareBaseURL string
 	ShareFile    string
 
@@ -127,6 +141,7 @@ func Load(get func(string) string) (*Config, error) {
 		AppsFile:                     trimOr(get("ADMIN_APPS_FILE"), filepath.Join(repoRoot, "data", "apps.json")),
 		AuditLog:                     trimOr(get("ADMIN_AUDIT_LOG"), filepath.Join(repoRoot, "audit.log")),
 		TermPwFile:                   trimOr(get("ADMIN_TERM_PW_FILE"), filepath.Join(os.Getenv("HOME"), ".hermes", "term_password")),
+		TermUnlock:                   parseTermUnlock(get("ADMIN_TERM_UNLOCK")),
 		ShareBaseURL:                 strings.TrimRight(strings.TrimSpace(get("ADMIN_SHARE_BASE_URL")), "/"),
 		ShareFile:                    trimOr(get("ADMIN_SHARE_FILE"), filepath.Join(repoRoot, "data", "file-shares.json")),
 		NotificationRetentionDays:    retentionDays,
@@ -196,6 +211,20 @@ func trimOr(raw, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseTermUnlock 解析 ADMIN_TERM_UNLOCK（大小写不敏感）：缺省与 password 均保留口令门，
+// off 关闭；非法值回落 password 并告警一次——不做 fatal，避免一个拼错的开关让进程起不来。
+func parseTermUnlock(raw string) TermUnlockMode {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(TermUnlockPassword):
+		return TermUnlockPassword
+	case string(TermUnlockOff):
+		return TermUnlockOff
+	default:
+		slog.Warn("ADMIN_TERM_UNLOCK 取值非法，回落为 password", "value", strings.TrimSpace(raw))
+		return TermUnlockPassword
+	}
 }
 
 // 数据库默认值：库名默认即云库名（唯一权威见 go-rewrite/docs/mysql-schema-cloud.md）。

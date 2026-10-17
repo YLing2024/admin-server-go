@@ -50,6 +50,7 @@ make run            # 构建并前台运行
 | `ADMIN_APPS_FILE` | `<root>/data/apps.json` | 应用面板登记表（只读消费，不存在不生成） |
 | `ADMIN_AUDIT_LOG` | `<root>/audit.log` | 审计日志 |
 | `ADMIN_TERM_PW_FILE` | `~/.hermes/term_password` | 终端口令哈希（`sha256$<salt>$<hash>`，0600） |
+| `ADMIN_TERM_UNLOCK` ← 新增 | `password` | 终端口令门开关：`password`（默认，需口令换票据）/ `off`（不要求口令，登录后台即可进终端；非法值回落 `password` 并告警）。仅关闭第二道门，`authRequired` 与票据校验不变 |
 | `ADMIN_SHARE_BASE_URL` | 空 | 分享链接基址（拼 `url` 字段用） |
 | `ADMIN_SHARE_FILE` | `<root>/data/file-shares.json` | 分享账本（本地 JSON） |
 | `ADMIN_NOTIFICATION_FILES_DIR` | `<root>/data/notification-files` | 通知附件根目录 |

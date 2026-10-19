@@ -19,12 +19,10 @@ import (
 
 	"admin-server-go/internal/apps"
 	"admin-server-go/internal/config"
-	"admin-server-go/internal/files"
 	"admin-server-go/internal/httpapi"
 	"admin-server-go/internal/metrics"
 	"admin-server-go/internal/mysql"
 	"admin-server-go/internal/probe"
-	"admin-server-go/internal/shares"
 	"admin-server-go/internal/state"
 	"admin-server-go/internal/store"
 )
@@ -95,8 +93,6 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
-	fileSvc := files.New(files.Options{Cfg: cfg, Log: logger})
-	shareSvc := shares.New(shares.Options{Cfg: cfg, Files: fileSvc, Log: logger})
 
 	handler := httpapi.New(httpapi.Options{
 		Cfg:     cfg,
@@ -105,8 +101,6 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		Log:     logger,
 		Metrics: metricsSvc,
 		Apps:    appsSvc,
-		FileSvc: fileSvc,
-		Shares:  shareSvc,
 	})
 
 	server := &http.Server{

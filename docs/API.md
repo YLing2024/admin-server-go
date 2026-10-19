@@ -8,7 +8,7 @@
 ## 一、通用约定
 
 - **基址**：本文所有示例用占位符 `$BASE_URL`，部署环境注入（如 `http://` + 反代入口）。仓库不写任何真实域名 / 内网地址。
-- **内容类型**：请求与响应均为 JSON（`Content-Type: application/json`）；文件上传为 `multipart/form-data`；SSE 为 `text/event-stream`；文件下载为二进制附件。
+- **内容类型**：请求与响应均为 JSON（`Content-Type: application/json`）；SSE 为 `text/event-stream`；博客图片上传为 `multipart/form-data`。
 - **鉴权凭证**：本文示例用 `$TOKEN` 占位。默认模式下为自带账号会话 token（`Authorization: Bearer <token>` 或 HttpOnly cookie `admin_session`，二者取其一）；`sso` 模式下为反代注入的 `X-Auth-User` 头。
 - **错误响应**：统一 JSON `{ "error": "<中文可定位文案>" }`，部分接口附 `code` / `retryAfter`。未单独列出的错误分支按「错误码表」的通用项处理。
 - **请求体解析时机**：请求体在鉴权之前解析（对齐 `app.use(express.json)`）。默认上限 100kb。解析失败 / 超限统一 `500 { "error": "服务器内部错误" }`。
@@ -54,10 +54,9 @@
 
 ### 3.2 时间与 ID
 
-- **时间**：`createdAt` / `expiresAt` / `lastUsedAt`（令牌、分享）为 **epoch 毫秒**；`system.uptime` 为**秒**。一律 UTC 数值，由前端按本地时区展示。
+- **时间**：`createdAt` / `expiresAt` / `lastUsedAt`（接口令牌）为 **epoch 毫秒**；`system.uptime` 为**秒**。一律 UTC 数值，由前端按本地时区展示。
 - **ID 类型**：
   - 接口令牌 `id`：**string**（`sha256(token)` 十六进制），令牌明文仅生成时返回一次。
-  - 分享 `id`：**string**（随机短 id）；分享 `token`：**string**（随机 URL-safe）。
   - 会话 `id`：**string**（会话 token）；历史会话 `id`：**string**（Hermes 会话 id）。
   - **项目级约定**：博客等模块的**雪花 ID（`public_id`）一律为字符串，禁止转 Number**（会丢精度）；本服务当前无雪花 ID 字段，`/api/blog/*` 由别的后端提供。
 
@@ -405,174 +404,18 @@
 - 错误：401；500 `{ "error": "吊销接口令牌失败" }`
 - 副作用：删 Redis key、写审计；幂等：**是**；限流：无
 
-## 七、版本与应用面板
-
-### GET /api/admin/versions
-
-- 鉴权：`authRequired`
-- 请求参数：无
-- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/versions"`
-- 成功 200：`{ "list": [ { "name": "Node.js", "category": "runtime", "version": "24.19.0", "ok": true } ] }`（60 秒结果缓存）
-- 错误：500 `{ "error": "获取软件版本失败: …" }`
-- 副作用：执行本机版本命令；幂等：是；限流：无（内部 60s 缓存）
-
-### GET /api/admin/apps
-
-- 鉴权：`authRequired`
-- 请求参数：`refresh`（query，string，否）—— `1`/`true` 绕过 10s 缓存
-- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/apps?refresh=1"`
-- 成功 200：`{ "apps": [ { "id": "…", "name": "…", "status": "up" } ], "categories": [ … ], "discovered": [ … ], "generatedAt": …, "cached": false, "ttlSeconds": 10, "registryPath": "…", "notice": null, "warning": null }`
-- 错误：500 `{ "error": "…" }`
-- 副作用：读登记表 + 探活（TCP/systemd/docker 只读）、写审计（**不记 url**）；幂等：是；限流：无（10s 缓存 + 单飞）
+## 七、公开应用中心
 
 ### GET /api/public/apps
 
 - 鉴权：无
 - 请求参数：`refresh`（query，string，否）—— `1`/`true` 请求刷新，但**按来源 IP 每 10s 至多一次真正刷新**，超出按缓存读
 - curl：`curl -sS "$BASE_URL/api/public/apps"`
-- 成功 200：`{ "categories": [ { "id": "…", "name": "…" } ], "apps": [ { "id": "…", "name": "…", "status": "up" } ] }`（字段白名单，剔除 `port/unit/container/probe/registryPath/registryMtime/notice/warning/discovered`）；响应头 `Cache-Control: no-store`
+- 成功 200：`{ "categories": [ { "id": "…", "name": "…" } ], "apps": [ { "id": "…", "name": "…", "status": "up" } ] }`（字段白名单：`id/name/category/desc/url/icon/status/latencyMs/onDemand`；登记表路径、mtime、notice、warning 与未登记端口发现一律不返回）；响应头 `Cache-Control: no-store`
 - 错误：503 `{ "error": "应用数据暂不可用" }`（不返回栈信息）
-- 副作用：探活只读、写审计（`public_apps_list`，不记 url）；幂等：是；限流：**是**（刷新窗口 10s / IP）
+- 副作用：探活只读（TCP/systemd/docker）、写审计（`public_apps_list`，不记 url）；幂等：是；限流：**是**（刷新窗口 10s / IP）
 
-## 八、文件
-
-### POST /api/admin/upload
-
-- 鉴权：`authRequired`
-- 请求参数：`multipart/form-data`，字段名 `file`（单文件，上限 100MB）
-- curl：`curl -sS -X POST -H "Authorization: Bearer $TOKEN" -F "file=@/path/to/file" "$BASE_URL/api/admin/upload"`
-- 成功 200：`{ "path": "<绝对路径>" }`（按时间戳命名，落 `uploads/`）
-- 错误码：400 未收到文件（`字段名应为 file`）；413 超过 100MB
-- 副作用：写磁盘、写审计；幂等：否；限流：无
-
-### POST /api/admin/files/upload
-
-- 鉴权：`authRequired`
-- 请求参数：query `path`（string，目标目录相对文件区根，缺省根）；`multipart/form-data` 字段 `file`（上限 500MB，保留原始文件名，重名加 `-2`）
-- curl：`curl -sS -X POST -H "Authorization: Bearer $TOKEN" -F "file=@/path/to/file" "$BASE_URL/api/admin/files/upload?path=docs"`
-- 成功 200：`{ "name": "<文件名>", "size": 1234, "path": "<绝对路径>" }`
-- 错误码：400 路径非法 / 未收到文件；403 受保护路径；413 超过 500MB
-- 副作用：写磁盘、写审计（受保护路径命中会删除已落盘文件）；幂等：否；限流：无
-
-### GET /api/admin/files
-
-- 鉴权：`authRequired`
-- 请求参数：query `path`（string，相对文件区根，缺省根）
-- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/files?path="`
-- 成功 200：`{ "path": "", "parent": null, "entries": [ { "name": "…", "type": "dir", "size": 0, "mtime": <ms> } ] }`
-  - 键顺序固定 `path` → `parent` → `entries`；根目录 `parent` 为 `null`，子目录 `parent` 为父相对路径（一级子目录为 `""`）。
-  - `mtime` 为 Node `stat.mtimeMs` 口径的**带小数毫秒**（浮点）。
-  - 排序：目录优先，同类按 `zh-Hans-CN`（汉字按拼音且整体排在拉丁之前）；跳过符号链接与受保护根项。
-  - 与 ICU 的少数生僻字排序差异见仓库根 `COMPAT.md`。
-- 错误码：400 路径非法 / 不是目录；404 目录不存在；500 `{ "error": "读取目录失败：…" }`
-- 副作用：无；幂等：是；限流：无
-
-### GET /api/admin/files/download
-
-- 鉴权：`authRequired`
-- 请求参数：query `path`（string，相对文件区根，必填）
-- curl：`curl -sS -H "Authorization: Bearer $TOKEN" -OJ "$BASE_URL/api/admin/files/download?path=docs/a.txt"`
-- 成功 200：二进制附件（`Content-Disposition: attachment`）
-- 错误码：400 路径非法 / 不是普通文件；403 受保护路径；404 文件不存在
-- 副作用：无；幂等：是；限流：无
-
-### POST /api/admin/files/mkdir
-
-- 鉴权：`authRequired`
-- 请求参数（body）：`{ "path": "<父目录相对路径>", "name": "<文件夹名>" }`
-- curl：`curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"path":"","name":"docs"}' "$BASE_URL/api/admin/files/mkdir"`
-- 成功 200：`{ "ok": true, "path": "docs" }`
-- 错误码：400 路径/名称非法；403 受保护路径；409 同名已存在；500 `{ "error": "创建失败：…" }`
-- 副作用：建目录、写审计；幂等：否；限流：无
-
-### POST /api/admin/files/rename
-
-- 鉴权：`authRequired`
-- 请求参数（body）：`{ "path": "<完整相对路径>", "name": "<新名称>" }`
-- curl：`curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"path":"docs/a.txt","name":"b.txt"}' "$BASE_URL/api/admin/files/rename"`
-- 成功 200：`{ "ok": true, "path": "docs/b.txt" }`
-- 错误码：400 路径/名称非法；403 源或目标受保护；404 文件不存在；409 同名已存在；500
-- 副作用：改磁盘、写审计；幂等：否；限流：无
-
-### DELETE /api/admin/files
-
-- 鉴权：`authRequired`
-- 请求参数：query `path`（string，相对文件区根，必填）
-- curl：`curl -sS -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/files?path=docs/a.txt"`
-- 成功 200：`{ "ok": true }`（目录递归）
-- 错误码：400 路径非法；403 受保护路径；404 文件不存在；500 `{ "error": "删除失败：…" }`
-- 副作用：删磁盘、写审计；幂等：否；限流：无
-
-### GET /api/admin/download
-
-- 鉴权：`authRequired`
-- 请求参数：query `path`（string，必填；支持 `~/…` 展开；resolve 后须落在白名单根目录内）
-- curl：`curl -sS -H "Authorization: Bearer $TOKEN" -OJ "$BASE_URL/api/admin/download?path=%2Ftmp%2Fa.txt"`
-- 成功 200：二进制附件
-- 错误码：400 缺少 path / 路径不在允许范围；404 文件不存在
-- 副作用：无；幂等：是；限流：无
-
-## 九、文件区临时链接（限时分享）
-
-### POST /api/admin/files/shares
-
-- 鉴权：`authRequired`
-- 请求参数（body）：
-
-  | 名称 | 类型 | 必填 | 默认 | 校验 |
-  |---|---|---|---|---|
-  | `path` | string | 是 | — | 相对文件区根、必须是普通文件、非受保护路径 |
-  | `expiresAt` | number | 否 | — | epoch 毫秒整数；`0`=永久；非 0 须为将来时刻；优先于 `ttlHours` |
-  | `ttlHours` | number | 否 | `24` | 夹紧 1~8760 小时 |
-  | `note` | string | 否 | `""` | 截断 500 字 |
-
-- curl：`curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"path":"docs/a.txt","ttlHours":24}' "$BASE_URL/api/admin/files/shares"`
-- 成功 201：share 视图：`{ "id": "…", "token": "…", "relPath": "docs/a.txt", "size": 1234, "note": "", "createdAt": <ms>, "expiresAt": <ms>, "revokedAt": null, "downloads": 0, "lastAccessAt": null, "lastAccessIp": null, "url": "<分享基址>/s/<token>", "status": "active", "remainingMs": <ms|null>, "fileExists": true }`
-- 错误码：400 路径非法 / 参数非法 / 目录或不支持类型；403 受保护路径；404 文件不存在
-- 副作用：写本地 JSON 账本、写审计；幂等：否；限流：无
-
-### GET /api/admin/files/shares
-
-- 鉴权：`authRequired`
-- 请求参数：无
-- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/files/shares"`
-- 成功 200：`{ "shares": [ <share 视图…> ] }`（按 `createdAt` 倒序；惰性清理 revoked>30 天 / expired>90 天）
-- 错误：无（账本损坏按空处理）；副作用：可能有惰性清理写盘；幂等：是；限流：无
-
-### PATCH /api/admin/files/shares/:id
-
-- 鉴权：`authRequired`
-- 请求参数：path `id`（string）；body 任选 `{ expiresAt?, note?, revoked? }`（`revoked:true` 撤销不可逆；`revoked:false` 拒绝；`expiresAt:0` 转永久）；仅 `active` 记录可操作
-- curl：`curl -sS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"note":"新版"}' "$BASE_URL/api/admin/files/shares/$ID"`
-- 成功 200：更新后的 share 视图
-- 错误码：400 `revoked` 非布尔 / 试图恢复撤销 / 无可更新字段 / 非 active / 时间非法；404 链接不存在
-- 副作用：写账本、写审计；幂等：是；限流：无
-
-### DELETE /api/admin/files/shares/:id
-
-- 鉴权：`authRequired`
-- 请求参数：path `id`（string）
-- curl：`curl -sS -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/files/shares/$ID"`
-- 成功 200：`{ "ok": true }`（只删记录，不动磁盘文件）
-- 错误：404 链接不存在
-- 副作用：写账本、写审计；幂等：是；限流：无
-
-### GET /s/:token
-
-- 鉴权：无（公开；公开访问路径由 nginx 决定且绝不加鉴权，token 即凭据）
-- 请求参数：path `token`（string，分享 token）
-- curl：`curl -sS -OJ "$BASE_URL/s/<token>"`
-- 成功 200：二进制附件（按 RFC 5987 编码文件名）；命中 `active` 时计数 +1 并记最后访问 IP
-- 错误码：
-
-  | 状态码 | 语义 |
-  |---|---|
-  | 404 | token 不存在 / 文件已删（返回极简 HTML 提示页） |
-  | 410 | 链接已撤销 / 已过期（同上 HTML 提示页） |
-
-- 副作用：更新下载计数与最后访问、写审计；幂等：否（每次计数）；限流：无
-
-## 十、Hermes 历史（只读）
+## 八、Hermes 历史（只读）
 
 ### GET /api/admin/history
 
@@ -592,7 +435,7 @@
 - 错误码：404 `{ "error": "会话不存在" }`；503 数据库不可用；500 `{ "error": "获取会话消息失败" }`
 - 副作用：只读；幂等：是；限流：无
 
-## 十一、Web 终端
+## 九、Web 终端
 
 ### POST /api/admin/term/unlock
 
@@ -649,17 +492,16 @@
 - 错误码：400 非法会话名；500 `{ "error": "关闭终端会话失败: …" }`
 - 副作用：`tmux kill-session`、写审计；幂等：是；限流：无
 
-## 十二、错误码表
+## 十、错误码表
 
 | 状态码 | 通用语义 |
 |---|---|
 | 400 | 请求参数非法（具体文案见各端点） |
 | 401 | 未登录 / 凭证无效 / 会话失效 |
-| 403 | 已登录但无权（只读令牌写入、受保护路径、非本机访问） |
+| 403 | 已登录但无权（只读令牌写入、非本机访问） |
 | 404 | 资源不存在（或 `sso` 模式下 `builtin` 专属入口） |
 | 409 | 冲突（同名已存在 / TOTP 已配置） |
-| 410 | 分享链接已撤销 / 已过期 |
-| 413 | 请求体 / 附件超限 |
+| 413 | 请求体超限 |
 | 429 | 触发限流（附 `retryAfter` 秒） |
 | 500 | 服务器内部错误（含请求体解析失败） |
 | 502 | 认证中心地址未配置 / 不可达 |

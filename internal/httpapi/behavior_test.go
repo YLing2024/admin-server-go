@@ -23,10 +23,10 @@ func newTestRoute(patterns ...string) *Server {
 // 去重、GET 后追加 HEAD，`ALL` 不参与。
 func TestAllowedMethods(t *testing.T) {
 	s := newTestRoute(
-		"GET /api/admin/apps",
-		"POST /api/admin/files/mkdir",
-		"GET /api/admin/files",
-		"DELETE /api/admin/files",
+		"GET /api/admin/api-tokens",
+		"POST /api/admin/api-tokens",
+		"PATCH /api/admin/api-tokens/:id",
+		"DELETE /api/admin/api-tokens/:id",
 		"ALL /api/admin/sessions*",
 		"GET /api/public/apps",
 	)
@@ -35,12 +35,11 @@ func TestAllowedMethods(t *testing.T) {
 		path string
 		want []string
 	}{
-		{"/api/admin/apps", []string{"GET", "HEAD"}},
-		{"/api/admin/files/mkdir", []string{"POST"}},
-		{"/api/admin/files", []string{"GET", "HEAD", "DELETE"}},
+		{"/api/admin/api-tokens", []string{"GET", "HEAD", "POST"}},
+		{"/api/admin/api-tokens/42", []string{"PATCH", "DELETE"}},
 		{"/api/admin/sessions/abc", nil}, // ALL 不贡献
 		{"/definitely-nope", nil},
-		{"/api/admin/apps/", []string{"GET", "HEAD"}}, // 尾部斜杠等价
+		{"/api/public/apps/", []string{"GET", "HEAD"}}, // 尾部斜杠等价
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodOptions, c.path, nil)
@@ -103,7 +102,7 @@ func TestMatchPath(t *testing.T) {
 		{"ALL /api/admin/sessions*", "/api/admin/sessions", true, ""},
 		{"ALL /api/admin/sessions*", "/api/admin/sessions/abc/pty", true, ""},
 		{"ALL /api/admin/sessions*", "/api/admin/sessionsX", false, ""},
-		{"GET /api/admin/files", "/api/admin/files/", true, ""},
+		{"GET /api/admin/api-tokens", "/api/admin/api-tokens/", true, ""},
 	}
 	for _, c := range cases {
 		rt := apiRoute{pattern: c.pattern}

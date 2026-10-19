@@ -55,10 +55,7 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "PATCH /api/admin/api-tokens/:id", auth: authRequired, handler: s.handleAPITokensUpdate},
 		{pattern: "DELETE /api/admin/api-tokens/:id", auth: authRequired, handler: s.handleAPITokensDelete},
 
-		// ④ versions
-		{pattern: "GET /api/admin/versions", auth: authRequired, handler: s.handleVersions},
-
-		// ⑤ term
+		// ④ term
 		{pattern: "POST /api/admin/term/unlock", auth: authRequired, handler: s.term.Unlock},
 		{pattern: "GET /api/admin/term/mode", auth: authRequired, handler: s.term.Mode},
 		{pattern: "GET /api/admin/term/verify", handler: s.term.Verify},
@@ -66,28 +63,10 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "POST /api/admin/term/sessions/close", auth: authRequired, handler: s.term.CloseSessions},
 		{pattern: "DELETE /api/admin/term/sessions/:name", auth: authRequired, handler: s.term.KillSession},
 
-		// ⑥ apps / ⑦ public-apps
-		{pattern: "GET /api/admin/apps", auth: authRequired, handler: s.apps.AdminApps},
+		// ⑤ public-apps（免鉴权；home 子域的「应用中心」依赖，不得删除）
 		{pattern: "GET /api/public/apps", handler: s.apps.PublicApps},
 
-		// ⑧ files
-		{pattern: "POST /api/admin/upload", auth: authRequired, handler: s.fileSvc.Upload},
-		{pattern: "POST /api/admin/files/upload", auth: authRequired, handler: s.fileSvc.FilesUpload},
-		{pattern: "GET /api/admin/files", auth: authRequired, handler: s.fileSvc.FilesList},
-		{pattern: "GET /api/admin/files/download", auth: authRequired, handler: s.fileSvc.FilesDownload},
-		{pattern: "POST /api/admin/files/mkdir", auth: authRequired, handler: s.fileSvc.FilesMkdir},
-		{pattern: "POST /api/admin/files/rename", auth: authRequired, handler: s.fileSvc.FilesRename},
-		{pattern: "DELETE /api/admin/files", auth: authRequired, handler: s.fileSvc.FilesDelete},
-		{pattern: "GET /api/admin/download", auth: authRequired, handler: s.fileSvc.Download},
-
-		// ⑨ shares
-		{pattern: "POST /api/admin/files/shares", auth: authRequired, handler: s.shares.Create},
-		{pattern: "GET /api/admin/files/shares", auth: authRequired, handler: s.shares.List},
-		{pattern: "PATCH /api/admin/files/shares/:id", auth: authRequired, handler: s.shares.Update},
-		{pattern: "DELETE /api/admin/files/shares/:id", auth: authRequired, handler: s.shares.Delete},
-		{pattern: "GET /s/:token", handler: s.shares.PublicDownload},
-
-		// ⑩ history（最后，且在 errorHandler 之后）
+		// ⑥ history（最后，且在 errorHandler 之后）
 		{pattern: "GET /api/admin/history", auth: authRequired, handler: s.history.List},
 		{pattern: "GET /api/admin/history/:id", auth: authRequired, handler: s.history.Detail},
 	}

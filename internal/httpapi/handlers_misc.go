@@ -1,14 +1,11 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"admin-server-go/internal/auth"
@@ -228,141 +225,4 @@ func jsNumber(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// ---- 软件版本（/api/admin/versions）----
-
-// versionCheck 是一条版本采集指令；名称/分类/命令与旧实现逐字一致。
-type versionCheck struct {
-	Name     string
-	Category string
-	Cmd      string
-}
-
-// nodeBin 与旧实现一致：本机 Node 运行时的 bin 目录（node/npm/playwright 等命令在此）。
-const nodeBin = "/root/.nvm/versions/node/v24.19.0/bin"
-
-// nodeModules 是同一运行时下的全局 node_modules；三个包直接读其 package.json。
-// 它不能由 nodeBin 加 "/lib/..." 拼出——nodeBin 已含结尾 /bin，拼接会得到不存在的路径。
-const nodeModules = "/root/.nvm/versions/node/v24.19.0/lib/node_modules"
-
-// versionChecks 是全部版本采集项（顺序即返回顺序）。
-var versionChecks = []versionCheck{
-	{Name: "Node.js", Category: "runtime", Cmd: nodeBin + "/node --version"},
-	{Name: "npm", Category: "runtime", Cmd: "PATH=" + nodeBin + ":$PATH " + nodeBin + "/npm --version"},
-	{Name: "Python", Category: "runtime", Cmd: "python3 --version 2>&1 | awk '{print $2}'"},
-	{Name: "Hermes", Category: "service", Cmd: "/usr/local/bin/hermes version 2>/dev/null | head -1 | grep -oE 'v[0-9.]+' | head -1 | sed 's/^v//'"},
-	{Name: "pi", Category: "service", Cmd: "cat " + nodeModules + "/@earendil-works/pi-coding-agent/package.json | grep -m1 '\"version\"' | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
-	{Name: "Codex", Category: "service", Cmd: "cat " + nodeModules + "/@openai/codex/package.json | grep -m1 '\"version\"' | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
-	{Name: "Playwright", Category: "service", Cmd: "PATH=" + nodeBin + ":$PATH " + nodeBin + "/playwright --version | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"},
-	{Name: "dida-cli", Category: "service", Cmd: "cat " + nodeModules + "/@suibiji/dida-cli/package.json | grep -m1 \"version\" | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'"},
-	{Name: "DeepTutor", Category: "service", Cmd: "/root/proj/deeptutor/.venv/bin/pip show deeptutor | grep -m1 Version | awk '{print $2}'"},
-}
-
-// versionItem 是单条版本结果（JSON 键顺序与旧实现一致）。
-type versionItem struct {
-	Name     string `json:"name"`
-	Category string `json:"category"`
-	Version  string `json:"version"`
-	OK       bool   `json:"ok"`
-}
-
-// versionCacheTTL 与旧实现一致：60 秒。
-const versionCacheTTL = 60 * time.Second
-
-// versionCache 缓存上一次采集结果，避免 1 秒轮询反复执行重命令。
-var versionCache struct {
-	mu   sync.Mutex
-	ts   time.Time
-	list []versionItem
-}
-
-// handleVersions 返回本地已安装软件版本（60 秒缓存）。
-func (s *Server) handleVersions(w http.ResponseWriter, r *http.Request) {
-	list, err := cachedVersions(r.Context())
-	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "获取软件版本失败: "+err.Error())
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"list": list})
-}
-
-// cachedVersions 命中 60 秒窗口则复用缓存，否则并行采集全部条目。
-func cachedVersions(ctx context.Context) ([]versionItem, error) {
-	versionCache.mu.Lock()
-	defer versionCache.mu.Unlock()
-	if versionCache.list != nil && time.Since(versionCache.ts) <= versionCacheTTL {
-		return versionCache.list, nil
-	}
-	list := collectVersions(ctx)
-	versionCache.list = list
-	versionCache.ts = time.Now()
-	return list, nil
-}
-
-// collectVersions 并行执行全部版本命令，单条失败只标记该条 ok=false，不影响其余。
-func collectVersions(ctx context.Context) []versionItem {
-	items := make([]versionItem, len(versionChecks))
-	var wg sync.WaitGroup
-	for i, vc := range versionChecks {
-		wg.Add(1)
-		go func(i int, vc versionCheck) {
-			defer wg.Done()
-			items[i] = runVersionCheck(ctx, vc)
-		}(i, vc)
-	}
-	wg.Wait()
-	return items
-}
-
-// runVersionCheck 执行单条命令（8 秒超时，shell 语义），取首行过 stripVersion。
-func runVersionCheck(ctx context.Context, vc versionCheck) versionItem {
-	item := versionItem{Name: vc.Name, Category: vc.Category, Version: "未知", OK: false}
-	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(cctx, "sh", "-c", vc.Cmd).Output()
-	if err != nil {
-		return item
-	}
-	line := strings.TrimSpace(string(out))
-	if idx := strings.IndexByte(line, '\n'); idx >= 0 {
-		line = strings.TrimSpace(line[:idx])
-	}
-	item.Version = stripVersion(line)
-	if item.Version == "" {
-		item.Version = "未知"
-	}
-	item.OK = true
-	return item
-}
-
-// stripVersion 去 v/V 前缀、去开头的 epoch（数字+冒号）、取第一个 '-' 前的主版本段。
-// 例：'5:8.0.2-3+deb13u2' → '8.0.2'；'v24.19.0' → '24.19.0'。
-func stripVersion(v string) string {
-	s := strings.TrimSpace(v)
-	if s == "" {
-		return ""
-	}
-	if c := s[0]; c == 'v' || c == 'V' {
-		s = s[1:]
-	}
-	s = trimEpochPrefix(s)
-	if idx := strings.IndexByte(s, '-'); idx >= 0 {
-		s = s[:idx]
-	}
-	return strings.TrimSpace(s)
-}
-
-// trimEpochPrefix 去掉形如 '5:' 的 Debian epoch 前缀（仅当冒号前全为数字）。
-func trimEpochPrefix(s string) string {
-	idx := strings.IndexByte(s, ':')
-	if idx <= 0 {
-		return s
-	}
-	for i := 0; i < idx; i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return s
-		}
-	}
-	return s[idx+1:]
 }

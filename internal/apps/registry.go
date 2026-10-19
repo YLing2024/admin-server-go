@@ -1,13 +1,9 @@
 package apps
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"time"
 )
@@ -19,16 +15,16 @@ type registryCache struct {
 	data      map[string]any
 }
 
-// readRegistry 读取应用登记表（只读，绝不创建）。返回是否存在、解析后的对象、mtime（毫秒）。
+// readRegistry 读取应用登记表（只读，绝不创建）。返回是否存在与解析后的对象。
 // 解析失败返回错误，message 以「应用登记表解析失败: 」开头。
-func (s *Service) readRegistry() (bool, map[string]any, *float64, error) {
+func (s *Service) readRegistry() (bool, map[string]any, error) {
 	p := s.cfg.AppsFile
 	st, err := os.Stat(p)
 	if err != nil {
 		s.regMu.Lock()
 		s.regCache = registryCache{path: p, mtimeNano: -1}
 		s.regMu.Unlock()
-		return false, nil, nil, nil
+		return false, nil, nil
 	}
 	mtimeNano := st.ModTime().UnixNano()
 
@@ -36,17 +32,17 @@ func (s *Service) readRegistry() (bool, map[string]any, *float64, error) {
 	if s.regCache.path == p && s.regCache.data != nil && s.regCache.mtimeNano == mtimeNano {
 		data := s.regCache.data
 		s.regMu.Unlock()
-		return true, data, mtimeMs(mtimeNano), nil
+		return true, data, nil
 	}
 	s.regMu.Unlock()
 
 	raw, err := os.ReadFile(p)
 	if err != nil {
-		return false, nil, nil, fmt.Errorf("应用登记表解析失败: %v", err)
+		return false, nil, fmt.Errorf("应用登记表解析失败: %v", err)
 	}
 	var parsed any
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return false, nil, nil, fmt.Errorf("应用登记表解析失败: %v", err)
+		return false, nil, fmt.Errorf("应用登记表解析失败: %v", err)
 	}
 	var data map[string]any
 	if m, ok := parsed.(map[string]any); ok {
@@ -55,38 +51,44 @@ func (s *Service) readRegistry() (bool, map[string]any, *float64, error) {
 	s.regMu.Lock()
 	s.regCache = registryCache{path: p, mtimeNano: mtimeNano, data: data}
 	s.regMu.Unlock()
-	return true, data, mtimeMs(mtimeNano), nil
+	return true, data, nil
 }
 
-func mtimeMs(nano int64) *float64 {
-	v := float64(nano) / 1e6
-	return &v
+// toPublicApp 把登记表条目 + 探活结果归一化成公开条目（缺省/异常输入一律兜底）。
+//
+// 字段严格取自公开白名单；名称截断 16 字、描述截断 24 字，与旧实现一致。
+func toPublicApp(a map[string]any, pr ProbeResult) PublicAppView {
+	nameSrc := a["name"]
+	if jsFalsy(nameSrc) {
+		nameSrc = a["id"]
+	}
+	view := PublicAppView{
+		ID:        a["id"],
+		Name:      truncate(nameSrc, 16),
+		Category:  categoryOf(a["category"]),
+		Status:    pr.Status,
+		LatencyMs: pr.LatencyMs,
+	}
+	if a["desc"] != nil {
+		desc := truncate(a["desc"], 24)
+		view.Desc = &desc
+	}
+	if a["onDemand"] == true {
+		view.OnDemand = true
+	}
+	view.URL = strOrNil(a["url"])
+	view.Icon = strOrNil(a["icon"])
+	return view
 }
 
-// registryPayloadPath 暴露登记表路径（审计与响应字段用，不含内容）。
-func (s *Service) registryPath() string { return s.cfg.AppsFile }
-
-// collectOnce 执行一次完整采集（不含 cached 字段；cached 由调用方按命中情况补）。
-func (s *Service) collectOnce() (*collectPayload, error) {
-	p := s.registryPath()
-	exists, data, mtime, err := s.readRegistry() // 解析失败会返回错误，由路由转 500
+// collectOnce 执行一次完整采集：读登记表 → 校验去重 → 并行探活 → 归一化分类。
+func (s *Service) collectOnce() (*PublicPayload, error) {
+	exists, data, err := s.readRegistry() // 解析失败会返回错误，由公开接口转 503
 	if err != nil {
 		return nil, err
 	}
-	generatedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-
 	if !exists {
-		return &collectPayload{
-			GeneratedAt:   generatedAt,
-			TTLSeconds:    ttlSeconds,
-			RegistryPath:  p,
-			RegistryMtime: nil,
-			Notice:        ptrString("未找到应用登记表"),
-			Warning:       nil,
-			Categories:    []CategoryAgg{},
-			Apps:          []AppView{},
-			Discovered:    []DiscoveredEntry{},
-		}, nil
+		return &PublicPayload{Categories: []PublicCategory{}, Apps: []PublicAppView{}}, nil
 	}
 	if data == nil {
 		data = map[string]any{}
@@ -94,12 +96,9 @@ func (s *Service) collectOnce() (*collectPayload, error) {
 
 	declaredCategories := anyArray(data["categories"])
 	rawApps := anyArray(data["apps"])
-	ignorePorts := anyArray(data["ignorePorts"])
-	ignoreProcesses := anyArray(data["ignoreProcesses"])
 
-	// 校验 + 去重（重复 id 保留第一条并记 warning）。
+	// 校验 + 去重（重复 id 保留第一条；hidden 应用不返回）。
 	seen := map[string]bool{}
-	warnings := []string{}
 	valid := []map[string]any{}
 	for _, item := range rawApps {
 		a, ok := item.(map[string]any)
@@ -115,15 +114,9 @@ func (s *Service) collectOnce() (*collectPayload, error) {
 		}
 		id := jsString(idVal)
 		if !idRe.MatchString(id) {
-			label := id
-			if label == "" {
-				label = "(空)"
-			}
-			warnings = append(warnings, "非法 id: "+label)
 			continue
 		}
 		if seen[id] {
-			warnings = append(warnings, "重复 id: "+id)
 			continue
 		}
 		seen[id] = true
@@ -142,46 +135,19 @@ func (s *Service) collectOnce() (*collectPayload, error) {
 	}
 	wg.Wait()
 
-	apps := make([]AppView, 0, len(valid))
+	apps := make([]PublicAppView, 0, len(valid))
 	for i := range valid {
-		apps = append(apps, ToAppView(valid[i], results[i]))
+		apps = append(apps, toPublicApp(valid[i], results[i]))
 	}
 
 	categories, apps := aggregateCategories(declaredCategories, apps)
-
-	occupiedPorts := []any{}
-	for _, item := range rawApps {
-		a, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		if n, ok := jsNumber(a["port"]); ok && n > 0 {
-			occupiedPorts = append(occupiedPorts, n)
-		}
-	}
-	discovered := s.collectDiscovered(ignorePorts, ignoreProcesses, occupiedPorts)
-
-	var warning *string
-	if len(warnings) > 0 {
-		warning = ptrString(strings.Join(warnings, "；"))
-	}
-
-	return &collectPayload{
-		GeneratedAt:   generatedAt,
-		TTLSeconds:    ttlSeconds,
-		RegistryPath:  p,
-		RegistryMtime: mtime,
-		Notice:        nil,
-		Warning:       warning,
-		Categories:    categories,
-		Apps:          apps,
-		Discovered:    discovered,
-	}, nil
+	return &PublicPayload{Categories: categories, Apps: apps}, nil
 }
 
 // aggregateCategories 分类聚合：未知分类归入「其他」（动态补一个 other），并回写 app.category。
-func aggregateCategories(declared []any, apps []AppView) ([]CategoryAgg, []AppView) {
-	catMap := map[string]*CategoryAgg{}
+// 输出只保留公开字段 id / name，分类顺序为登记表声明顺序（other 追加在末尾）。
+func aggregateCategories(declared []any, apps []PublicAppView) ([]PublicCategory, []PublicAppView) {
+	names := map[string]string{}
 	order := []string{}
 	for _, c := range declared {
 		cm, ok := c.(map[string]any)
@@ -193,48 +159,27 @@ func aggregateCategories(declared []any, apps []AppView) ([]CategoryAgg, []AppVi
 		if jsTruthy(cm["name"]) {
 			name = jsString(cm["name"])
 		}
-		if existing, ok := catMap[id]; ok {
-			existing.Name = name
+		if _, exists := names[id]; exists {
+			names[id] = name
 			continue
 		}
-		catMap[id] = &CategoryAgg{ID: id, Name: name}
+		names[id] = name
 		order = append(order, id)
 	}
 	for i := range apps {
-		c, ok := catMap[apps[i].Category]
-		if !ok {
-			if _, hasOther := catMap[otherCategoryID]; !hasOther {
-				catMap[otherCategoryID] = &CategoryAgg{ID: otherCategoryID, Name: otherCategoryName}
+		if _, ok := names[apps[i].Category]; !ok {
+			if _, hasOther := names[otherCategoryID]; !hasOther {
+				names[otherCategoryID] = otherCategoryName
 				order = append(order, otherCategoryID)
 			}
 			apps[i].Category = otherCategoryID
-			c = catMap[otherCategoryID]
-		}
-		c.Total++
-		if apps[i].Status == StatusUp {
-			c.Up++
-		} else if apps[i].Status == StatusDown {
-			c.Down++
 		}
 	}
-	categories := make([]CategoryAgg, 0, len(order))
+	categories := make([]PublicCategory, 0, len(order))
 	for _, id := range order {
-		categories = append(categories, *catMap[id])
+		categories = append(categories, PublicCategory{ID: id, Name: names[id]})
 	}
 	return categories, apps
-}
-
-// collectDiscovered 执行 `ss -ltnp` 并解析未登记发现；解析失败返回 []，不影响 apps。
-func (s *Service) collectDiscovered(ignorePorts, ignoreProcesses, occupiedPorts []any) []DiscoveredEntry {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "ss", "-ltnp")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		return []DiscoveredEntry{}
-	}
-	return ScanDiscovered(stdout.String(), ignorePorts, ignoreProcesses, occupiedPorts)
 }
 
 // anyArray 把外部输入规整为数组；非数组返回空数组。
@@ -247,31 +192,30 @@ func anyArray(v any) []any {
 
 /* ============ 采集器（模块级缓存 + 单飞） ============ */
 
-// collector 持有一次采集的缓存与在途 Promise 等价物；admin 与 public 各自实例，互不影响。
+// collector 持有一次采集的缓存与在途 Promise 等价物。
 type collector struct {
 	s       *Service
 	mu      sync.Mutex
 	at      time.Time
-	payload *collectPayload
+	payload *PublicPayload
 	fut     *future
 }
 
 // future 是「在途采集」的完成信号与结果，等价旧实现里共享的 Promise。
 type future struct {
 	done    chan struct{}
-	payload *collectPayload
+	payload *PublicPayload
 	err     error
 }
 
 func newCollector(s *Service) *collector { return &collector{s: s} }
 
-// getPayload 返回采集载荷。命中 10s 缓存且非强制刷新时标记 cached=true；
+// getPayload 返回采集载荷。命中 10s 缓存且非强制刷新时复用缓存；
 // 并发请求（含 refresh=1）复用同一次在途采集。
-func (c *collector) getPayload(refresh bool) (*collectPayload, error) {
+func (c *collector) getPayload(refresh bool) (*PublicPayload, error) {
 	c.mu.Lock()
 	if !refresh && c.payload != nil && time.Since(c.at) < time.Duration(ttlSeconds)*time.Second {
 		cp := *c.payload
-		cp.Cached = true
 		c.mu.Unlock()
 		return &cp, nil
 	}
@@ -283,7 +227,6 @@ func (c *collector) getPayload(refresh bool) (*collectPayload, error) {
 			return nil, f.err
 		}
 		cp := *f.payload
-		cp.Cached = false
 		return &cp, nil
 	}
 	f := &future{done: make(chan struct{})}
@@ -309,6 +252,5 @@ func (c *collector) getPayload(refresh bool) (*collectPayload, error) {
 		return nil, err
 	}
 	cp := *payload
-	cp.Cached = false
 	return &cp, nil
 }

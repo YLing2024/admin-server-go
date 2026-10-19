@@ -21,39 +21,10 @@ type PublicCategory struct {
 	Name string `json:"name"`
 }
 
-// PublicPayload 是公开接口的响应体：剔除登记表路径 / mtime / notice / warning 与未登记发现。
+// PublicPayload 是公开接口的响应体：登记表路径 / mtime / notice / warning 与未登记发现一律不出现。
 type PublicPayload struct {
 	Categories []PublicCategory `json:"categories"`
 	Apps       []PublicAppView  `json:"apps"`
-}
-
-// ToPublicApp 把单条应用投影为公开字段（白名单外全部丢弃）。
-func ToPublicApp(app AppView) PublicAppView {
-	return PublicAppView{
-		ID:        app.ID,
-		Name:      app.Name,
-		Category:  app.Category,
-		Desc:      app.Desc,
-		URL:       app.URL,
-		Icon:      app.Icon,
-		Status:    app.Status,
-		LatencyMs: app.LatencyMs,
-		OnDemand:  app.OnDemand,
-	}
-}
-
-// ToPublicPayload 把采集载荷收窄为公开响应：categories 只留 {id,name}，apps 走白名单，
-// 剔除 registryPath / registryMtime / notice / warning 与 discovered 等内部信息。
-func ToPublicPayload(payload *collectPayload) *PublicPayload {
-	cats := make([]PublicCategory, 0, len(payload.Categories))
-	for _, c := range payload.Categories {
-		cats = append(cats, PublicCategory{ID: c.ID, Name: c.Name})
-	}
-	apps := make([]PublicAppView, 0, len(payload.Apps))
-	for _, a := range payload.Apps {
-		apps = append(apps, ToPublicApp(a))
-	}
-	return &PublicPayload{Categories: cats, Apps: apps}
 }
 
 // RefreshLimiter 是按来源 key 的刷新限流：同一 key 在窗口内只允许一次返回 true。

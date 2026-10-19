@@ -2,8 +2,6 @@ package apps
 
 import (
 	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -116,141 +114,10 @@ func DockerStatusFromOutput(out string) string {
 	}
 }
 
-// ToAppView 把登记表条目 + 探活结果归一化成接口返回条目（缺省/异常输入一律兜底）。
-func ToAppView(a map[string]any, pr ProbeResult) AppView {
-	var port *int
-	if n, ok := jsNumber(a["port"]); ok && n > 0 {
-		v := int(n)
-		port = &v
-	}
-	nameSrc := a["name"]
-	if jsFalsy(nameSrc) {
-		nameSrc = a["id"]
-	}
-	view := AppView{
-		ID:        a["id"],
-		Name:      truncate(nameSrc, 16),
-		Category:  categoryOf(a["category"]),
-		Port:      port,
-		Tags:      tagsOf(a["tags"]),
-		Status:    pr.Status,
-		ProbeType: pr.ProbeType,
-		LatencyMs: pr.LatencyMs,
-		Detail:    pr.Detail,
-		Error:     errOrNil(pr.Error),
-	}
-	if a["desc"] != nil {
-		desc := truncate(a["desc"], 24)
-		view.Desc = &desc
-	}
-	if a["onDemand"] == true {
-		view.OnDemand = true
-	}
-	view.URL = strOrNil(a["url"])
-	view.Icon = strOrNil(a["icon"])
-	return view
-}
-
 // categoryOf 复刻 `a.category != null ? String(a.category) : ”`。
 func categoryOf(v any) string {
 	if v == nil {
 		return ""
 	}
 	return jsString(v)
-}
-
-// tagsOf 复刻 `Array.isArray(tags) ? tags.map(String) : []`。
-func tagsOf(v any) []string {
-	out := []string{}
-	arr, ok := v.([]any)
-	if !ok {
-		return out
-	}
-	for _, item := range arr {
-		out = append(out, jsString(item))
-	}
-	return out
-}
-
-var (
-	ssLocalPortRe = regexp.MustCompile(`127\.0\.0\.1:(\d+)`)
-	ssUserRe      = regexp.MustCompile(`users:\(\("([^"]+)",pid=\d+`)
-)
-
-// ScanDiscovered 解析 `ss -ltnp` 输出为未登记发现：只取 127.0.0.1 监听行，
-// 排除 ignorePorts / ignoreProcesses / 已登记端口 / docker-proxy，按端口升序最多 30 条。
-func ScanDiscovered(stdout string, ignorePorts, ignoreProcesses, occupiedPorts []any) []DiscoveredEntry {
-	ignore := numberSet(ignorePorts)
-	occupied := numberSet(occupiedPorts)
-	procSkip := make([]*regexp.Regexp, 0, len(ignoreProcesses))
-	for _, pattern := range ignoreProcesses {
-		re, err := regexp.Compile(jsString(pattern))
-		if err != nil {
-			continue // 单个正则写错不影响其它规则
-		}
-		procSkip = append(procSkip, re)
-	}
-
-	found := map[int]DiscoveredEntry{}
-	order := []int{}
-	for _, line := range strings.Split(stdout, "\n") {
-		if !strings.Contains(line, "127.0.0.1:") {
-			continue
-		}
-		pm := ssLocalPortRe.FindStringSubmatch(line)
-		if pm == nil {
-			continue
-		}
-		port, err := strconv.Atoi(pm[1])
-		if err != nil {
-			continue
-		}
-		if ignore[port] || occupied[port] {
-			continue
-		}
-		var process *string
-		if um := ssUserRe.FindStringSubmatch(line); um != nil {
-			p := um[1]
-			process = &p
-		}
-		if process != nil && *process == "docker-proxy" {
-			continue
-		}
-		if process != nil {
-			skip := false
-			for _, re := range procSkip {
-				if re.MatchString(*process) {
-					skip = true
-					break
-				}
-			}
-			if skip {
-				continue
-			}
-		}
-		if _, seen := found[port]; !seen {
-			found[port] = DiscoveredEntry{Port: port, Process: process, URL: nil}
-			order = append(order, port)
-		}
-	}
-	sort.Ints(order)
-	out := make([]DiscoveredEntry, 0, len(order))
-	for _, port := range order {
-		if len(out) >= maxDiscovered {
-			break
-		}
-		out = append(out, found[port])
-	}
-	return out
-}
-
-// numberSet 把数组按 JS Number 语义规整成整数集合（非有限项丢弃，永不会命中）。
-func numberSet(values []any) map[int]bool {
-	out := map[int]bool{}
-	for _, v := range values {
-		if n, ok := jsNumber(v); ok {
-			out[int(n)] = true
-		}
-	}
-	return out
 }

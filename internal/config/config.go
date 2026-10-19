@@ -48,15 +48,11 @@ type Config struct {
 	AuthMode AuthMode
 
 	ConfigPath string
-	UploadDir  string
-	FileDir    string
 	AppsFile   string
 	AuditLog   string
 	TermPwFile string
 	// TermUnlock 决定 POST /api/admin/term/unlock 是否校验终端口令（默认 password）。
-	TermUnlock   TermUnlockMode
-	ShareBaseURL string
-	ShareFile    string
+	TermUnlock TermUnlockMode
 
 	RedisURL    string
 	RedisPrefix string
@@ -124,14 +120,10 @@ func Load(get func(string) string) (*Config, error) {
 		Port:                        port,
 		AuthMode:                    authMode,
 		ConfigPath:                  trimOr(get("ADMIN_CONFIG_PATH"), filepath.Join(repoRoot, "config.json")),
-		UploadDir:                   trimOr(get("ADMIN_UPLOAD_DIR"), filepath.Join(repoRoot, "uploads")),
-		FileDir:                     trimOr(get("ADMIN_FILE_DIR"), "/root/files/download"),
 		AppsFile:                    trimOr(get("ADMIN_APPS_FILE"), filepath.Join(repoRoot, "data", "apps.json")),
 		AuditLog:                    trimOr(get("ADMIN_AUDIT_LOG"), filepath.Join(repoRoot, "audit.log")),
 		TermPwFile:                  trimOr(get("ADMIN_TERM_PW_FILE"), filepath.Join(os.Getenv("HOME"), ".hermes", "term_password")),
 		TermUnlock:                  parseTermUnlock(get("ADMIN_TERM_UNLOCK")),
-		ShareBaseURL:                strings.TrimRight(strings.TrimSpace(get("ADMIN_SHARE_BASE_URL")), "/"),
-		ShareFile:                   trimOr(get("ADMIN_SHARE_FILE"), filepath.Join(repoRoot, "data", "file-shares.json")),
 		RedisURL:                    trimOr(get("REDIS_URL"), "redis://127.0.0.1:6379"),
 		RedisPrefix:                 trimOr(get("ADMIN_REDIS_PREFIX"), "admin-go:session:"),
 		SamplerLock:                 trimOr(get("ADMIN_SAMPLER_LOCK"), filepath.Join(tmp, "admin-server-go-sampler.lock")),
@@ -229,6 +221,5 @@ func (c *Config) Describe() string {
 		fmt.Sprintf("监听 http://%s:%d", c.Host, c.Port),
 		"认证模式 " + string(c.AuthMode),
 		"数据库 mysql " + c.DBMetricsName,
-		"文件区 " + c.FileDir,
 	}, " | ")
 }

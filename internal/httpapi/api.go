@@ -1,8 +1,7 @@
 // Package httpapi 用标准库 net/http 复刻旧实现（Express 4）的 HTTP 契约。
 //
 // 装配顺序与旧 src/index.ts 逐条对齐：请求体解析（默认 100kb）→ system / auth / api-tokens /
-// versions / term / apps / public-apps / files / shares / history 各路由（顺序即优先级）→
-// 未知路径按 Express 默认 404 兜底。
+// term / public-apps / history 各路由（顺序即优先级）→ 未知路径按 Express 默认 404 兜底。
 //
 // 业务实现放在各 internal/<domain> 包，本包只负责路由分发、鉴权包装与全局行为（含鉴权前解析请求体）。
 package httpapi
@@ -38,31 +37,9 @@ type MetricsService interface {
 	Services(w http.ResponseWriter, r *http.Request)
 }
 
-// AppsService 是应用探活面板域（internal/apps 实现）。
+// AppsService 是应用探活面板域（internal/apps 实现），只服务公开接口。
 type AppsService interface {
-	AdminApps(w http.ResponseWriter, r *http.Request)
 	PublicApps(w http.ResponseWriter, r *http.Request)
-}
-
-// FilesService 是文件区与通用上传下载域（internal/files 实现）。
-type FilesService interface {
-	Upload(w http.ResponseWriter, r *http.Request)
-	FilesUpload(w http.ResponseWriter, r *http.Request)
-	FilesList(w http.ResponseWriter, r *http.Request)
-	FilesDownload(w http.ResponseWriter, r *http.Request)
-	FilesMkdir(w http.ResponseWriter, r *http.Request)
-	FilesRename(w http.ResponseWriter, r *http.Request)
-	FilesDelete(w http.ResponseWriter, r *http.Request)
-	Download(w http.ResponseWriter, r *http.Request)
-}
-
-// SharesService 是文件区临时链接域（internal/shares 实现）。
-type SharesService interface {
-	Create(w http.ResponseWriter, r *http.Request)
-	List(w http.ResponseWriter, r *http.Request)
-	Update(w http.ResponseWriter, r *http.Request)
-	Delete(w http.ResponseWriter, r *http.Request)
-	PublicDownload(w http.ResponseWriter, r *http.Request)
 }
 
 // Options 是装配参数。
@@ -73,8 +50,6 @@ type Options struct {
 	Log     *slog.Logger
 	Metrics MetricsService
 	Apps    AppsService
-	FileSvc FilesService
-	Shares  SharesService
 }
 
 // Server 是 HTTP 装配体。
@@ -86,8 +61,6 @@ type Server struct {
 	auth    *auth.Authenticator
 	metrics MetricsService
 	apps    AppsService
-	fileSvc FilesService
-	shares  SharesService
 	term    *term.Service
 	history *history.Service
 
@@ -107,8 +80,6 @@ func New(opts Options) *Server {
 		log:         opts.Log,
 		metrics:     opts.Metrics,
 		apps:        opts.Apps,
-		fileSvc:     opts.FileSvc,
-		shares:      opts.Shares,
 		term:        term.New(term.Options{Cfg: opts.Cfg, Redis: opts.Redis, Log: opts.Log}),
 		history:     history.New(history.Options{Cfg: opts.Cfg, Log: opts.Log}),
 		totpLimiter: auth.NewRateLimiter(5, []int{60, 300, 900}),

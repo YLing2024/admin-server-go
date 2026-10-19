@@ -24,15 +24,14 @@ type Options struct {
 
 // Service 是应用面板服务实例。
 //
-// admin 与 public 各自持有一个采集器（独立 10s 缓存 + 单飞），互不影响；登记表解析结果按 mtime
-// 缓存在 regCache / regMu 下。tcpProbe 是注入的本地端口探活闭包。
+// 公开接口持有一个采集器（10s 缓存 + 单飞）；登记表解析结果按 mtime 缓存在 regCache / regMu 下。
+// tcpProbe 是注入的本地端口探活闭包。
 type Service struct {
 	cfg *config.Config
 	log *slog.Logger
 
 	tcpProbe tcpChecker
 
-	admin   *collector
 	publicC *collector
 	// refresh 是公开接口的刷新限流：按来源 IP 每 10s 至多真正刷新一次。
 	refresh *RefreshLimiter
@@ -58,7 +57,6 @@ func New(opts Options) *Service {
 	}
 	// 单条探活统一 1500ms 超时，与登记表内的探活约定一致。
 	s.tcpProbe = func(port int) bool { return pr.CheckTCPPort(port, probeTimeoutMs) }
-	s.admin = newCollector(s)
 	s.publicC = newCollector(s)
 	return s
 }
@@ -73,7 +71,7 @@ func isRefresh(r *http.Request) bool {
 func elapsedMs(t0 time.Time) int64 { return time.Since(t0).Milliseconds() }
 
 // countDown 统计探活结果为 down 的条数（审计用，绝不读登记表 url）。
-func countDown(apps []AppView) int {
+func countDown(apps []PublicAppView) int {
 	n := 0
 	for i := range apps {
 		if apps[i].Status == StatusDown {
@@ -81,23 +79,6 @@ func countDown(apps []AppView) int {
 		}
 	}
 	return n
-}
-
-// AdminApps 处理 GET /api/admin/apps（上游已完成鉴权）。
-//
-// `?refresh=1` 绕过 10s 缓存；解析失败回 500 + {error}。审计只记条数 / 失败条数 / 耗时，绝不记 url。
-func (s *Service) AdminApps(w http.ResponseWriter, r *http.Request) {
-	ip := util.ClientIP(r)
-	t0 := time.Now()
-	payload, err := s.admin.getPayload(isRefresh(r))
-	if err != nil {
-		util.Audit(s.cfg.AuditLog, "apps_list", ip, false, fmt.Sprintf("ms=%d", elapsedMs(t0)))
-		httpx.Error(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	util.Audit(s.cfg.AuditLog, "apps_list", ip, true,
-		fmt.Sprintf("apps=%d failed=%d ms=%d", len(payload.Apps), countDown(payload.Apps), elapsedMs(t0)))
-	httpx.WriteJSON(w, http.StatusOK, payload)
 }
 
 // PublicApps 处理 GET /api/public/apps（免鉴权）。
@@ -118,5 +99,5 @@ func (s *Service) PublicApps(w http.ResponseWriter, r *http.Request) {
 	util.Audit(s.cfg.AuditLog, "public_apps_list", ip, true,
 		fmt.Sprintf("apps=%d failed=%d ms=%d", len(payload.Apps), countDown(payload.Apps), elapsedMs(t0)))
 	w.Header().Set("Cache-Control", "no-store")
-	httpx.WriteJSON(w, http.StatusOK, ToPublicPayload(payload))
+	httpx.WriteJSON(w, http.StatusOK, payload)
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,13 +18,7 @@ type tcpChecker func(port int) bool
 func probeApp(app map[string]any, check tcpChecker) ProbeResult {
 	probe := NormalizeProbe(app)
 	if probe == nil {
-		return ProbeResult{
-			Status:    StatusUnknown,
-			ProbeType: nil,
-			LatencyMs: nil,
-			Detail:    ptrString("无可用探活方式"),
-			Error:     nil,
-		}
+		return ProbeResult{Status: StatusUnknown}
 	}
 
 	var r ProbeResult
@@ -41,19 +34,12 @@ func probeApp(app map[string]any, check tcpChecker) ProbeResult {
 	}
 	// 按需唤醒：平时停着、访问时才起，探活不通属正常 → 归为休眠。
 	if app["onDemand"] == true && r.Status == StatusDown {
-		return ProbeResult{
-			Status:    StatusIdle,
-			ProbeType: ptrString(probe.Type),
-			LatencyMs: nil,
-			Detail:    ptrString("按需唤醒，当前休眠"),
-			Error:     nil,
-		}
+		return ProbeResult{Status: StatusIdle}
 	}
-	r.ProbeType = ptrString(probe.Type)
 	return r
 }
 
-// noRedirectClient 用不跟随重定向的客户端，等价旧实现的 redirect: 'manual'。
+// newProbeClient 用不跟随重定向的客户端，等价旧实现的 redirect: 'manual'。
 func newProbeClient() *http.Client {
 	return &http.Client{
 		Timeout: probeTimeoutMs * time.Millisecond,
@@ -70,29 +56,12 @@ func probeHTTP(target string, expect []int) ProbeResult {
 	latency := time.Since(start).Milliseconds()
 	if err == nil {
 		defer resp.Body.Close()
-		code := resp.StatusCode
-		status := HTTPStatusFromCode(code, expect)
-		return ProbeResult{
-			Status:    status,
-			LatencyMs: ptrI64(latency),
-			Detail:    ptrString(fmt.Sprintf("HTTP %d", code)),
-			Error:     nil,
-		}
+		return ProbeResult{Status: HTTPStatusFromCode(resp.StatusCode, expect), LatencyMs: ptrI64(latency)}
 	}
 	if isTimeout(err) {
-		return ProbeResult{
-			Status:    StatusDegraded,
-			LatencyMs: ptrI64(latency),
-			Detail:    ptrString("HTTP 超时"),
-			Error:     ptrString(fmt.Sprintf("探活超时（>%dms）", probeTimeoutMs)),
-		}
+		return ProbeResult{Status: StatusDegraded, LatencyMs: ptrI64(latency)}
 	}
-	return ProbeResult{
-		Status:    StatusDown,
-		LatencyMs: ptrI64(latency),
-		Detail:    ptrString("HTTP 不可达"),
-		Error:     ptrString(err.Error()),
-	}
+	return ProbeResult{Status: StatusDown, LatencyMs: ptrI64(latency)}
 }
 
 // probeSystemd 执行 systemctl is-active；非 active 单元退出码非 0，但 stdout 仍可能是 inactive/failed。
@@ -100,28 +69,15 @@ func probeSystemd(unit string) ProbeResult {
 	start := time.Now()
 	out, runErr := execStdout(probeTimeoutMs, "systemctl", "is-active", unit)
 	latency := time.Since(start).Milliseconds()
-	if runErr == nil {
-		trimmed := strings.TrimSpace(out)
-		return ProbeResult{
-			Status:    SystemdStatusFromOutput(trimmed),
-			LatencyMs: ptrI64(latency),
-			Detail:    ptrString("systemd " + trimmed),
-			Error:     nil,
-		}
-	}
 	trimmed := strings.TrimSpace(out)
+	if runErr == nil {
+		return ProbeResult{Status: SystemdStatusFromOutput(trimmed), LatencyMs: ptrI64(latency)}
+	}
 	status := StatusDown
 	if trimmed == "activating" || trimmed == "reloading" {
 		status = StatusDegraded
 	}
-	res := ProbeResult{Status: status, LatencyMs: ptrI64(latency)}
-	if trimmed != "" {
-		res.Detail = ptrString("systemd " + trimmed)
-	} else {
-		res.Detail = ptrString("systemd 不可用")
-		res.Error = ptrString("无法执行 systemctl")
-	}
-	return res
+	return ProbeResult{Status: status, LatencyMs: ptrI64(latency)}
 }
 
 // probeDocker 执行 docker inspect -f '{{.State.Status}}'；容器不存在 / docker 不可用 → down。
@@ -129,21 +85,10 @@ func probeDocker(container string) ProbeResult {
 	start := time.Now()
 	out, runErr := execStdout(probeTimeoutMs, "docker", "inspect", "-f", "{{.State.Status}}", container)
 	latency := time.Since(start).Milliseconds()
-	if runErr == nil {
-		trimmed := strings.TrimSpace(out)
-		return ProbeResult{
-			Status:    DockerStatusFromOutput(trimmed),
-			LatencyMs: ptrI64(latency),
-			Detail:    ptrString("docker " + trimmed),
-			Error:     nil,
-		}
+	if runErr != nil {
+		return ProbeResult{Status: StatusDown, LatencyMs: ptrI64(latency)}
 	}
-	return ProbeResult{
-		Status:    StatusDown,
-		LatencyMs: ptrI64(latency),
-		Detail:    ptrString("docker 不可用"),
-		Error:     ptrString(runErr.Error()),
-	}
+	return ProbeResult{Status: DockerStatusFromOutput(strings.TrimSpace(out)), LatencyMs: ptrI64(latency)}
 }
 
 // probeTCP 探测本地端口；latency 为探活耗时。
@@ -151,17 +96,11 @@ func probeTCP(port int, check tcpChecker) ProbeResult {
 	start := time.Now()
 	up := check(port)
 	latency := time.Since(start).Milliseconds()
-	res := ProbeResult{
-		Status:    StatusDown,
-		LatencyMs: ptrI64(latency),
-		Detail:    ptrString(fmt.Sprintf("TCP %d %dms", port, latency)),
-	}
+	status := StatusDown
 	if up {
-		res.Status = StatusUp
-	} else {
-		res.Error = ptrString("连接被拒绝")
+		status = StatusUp
 	}
-	return res
+	return ProbeResult{Status: status, LatencyMs: ptrI64(latency)}
 }
 
 // isTimeout 判定 HTTP 探活是否超时（客户端超时或请求上下文超时）。

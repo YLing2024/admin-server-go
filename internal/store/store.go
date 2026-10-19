@@ -1,4 +1,4 @@
-// Package store 是 admin-server-go 两个数据库（指标 metrics、通知 notifications）的访问层。
+// Package store 是 admin-server-go 指标数据库（metrics）的访问层。
 //
 // 自 2026-10-16 起存储一律 MySQL（用户口径变更，SQLite 已移除）：业务层只经本包与
 // internal/mysql 方言访问数据库，运行期不存在方言分支或 DB_DRIVER 开关。保留 Dialect
@@ -25,8 +25,6 @@ type Dialect interface {
 	DriverName() string
 	// MigrateMetrics 增量迁移指标库（raw + 分钟/小时/天物化桶）。
 	MigrateMetrics(ctx context.Context, db *sql.DB) error
-	// MigrateNotifications 增量迁移通知库（通知表 / 类别表 / 附件元信息表 + type 列回填）。
-	MigrateNotifications(ctx context.Context, db *sql.DB) error
 	// ColumnExists 探测列是否存在。
 	ColumnExists(ctx context.Context, q Querier, table, column string) (bool, error)
 	// TableColumns 返回表列名（按定义顺序）。

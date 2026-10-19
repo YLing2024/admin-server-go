@@ -1,9 +1,9 @@
 // Package mysql 是 admin-server-go 存储层的 MySQL 方言实现（github.com/go-sql-driver/mysql，
 // 自 2026-10-16 起为唯一实现）。集中处理：DSN 组装、DDL 类型（VARCHAR/BIGINT AUTO_INCREMENT/DOUBLE）、
-// 列探测（information_schema.columns）、自增主键回填（LastInsertId）、upsert（ON DUPLICATE KEY UPDATE）、
-// seed（INSERT IGNORE）。迁移只做增量，绝不 DROP / TRUNCATE / 重建表。
+// 列探测（information_schema.columns）、自增主键回填（LastInsertId）、upsert（ON DUPLICATE KEY UPDATE）。
+// 迁移只做增量，绝不 DROP / TRUNCATE / 重建表。
 //
-// 两个逻辑库映射为同一 MySQL 实例下的两个 schema，由 DSN 的库名选定；连接各自独立。
+// 服务连接单个指标逻辑库，映射为 MySQL 实例下的一个 schema，由 DSN 的库名选定。
 package mysql
 
 import (
@@ -63,46 +63,6 @@ func metricsDDL() []string {
 	return stmts
 }
 
-// typeKeyCol 是通知类别表主键列名。key 在 MySQL 是保留字必须引用；
-// 而 DDL 用反引号原生字符串书写（无法内嵌反引号），故对该标识符单独拼接。
-const typeKeyCol = "`key`"
-
-var notificationsDDL = []string{
-	`CREATE TABLE IF NOT EXISTS notifications (
-		id         BIGINT NOT NULL AUTO_INCREMENT,
-		ts         BIGINT NOT NULL,
-		level      VARCHAR(16) NOT NULL,
-		source     VARCHAR(190) NOT NULL,
-		title      VARCHAR(255) NOT NULL,
-		body       MEDIUMTEXT NULL,
-		link       TEXT NULL,
-		dedup_key  VARCHAR(190) NULL,
-		read_at    BIGINT NULL,
-		PRIMARY KEY (id),
-		KEY idx_notifications_ts (ts),
-		KEY idx_notifications_read_at (read_at),
-		KEY idx_notifications_dedup_key (dedup_key),
-		KEY idx_notifications_source (source)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-	`CREATE TABLE IF NOT EXISTS notification_types (
-		` + typeKeyCol + `         VARCHAR(64) NOT NULL,
-		label         VARCHAR(190) NOT NULL,
-		description   TEXT NULL,
-		default_level VARCHAR(16) NULL,
-		sort          INT DEFAULT 0,
-		enabled       TINYINT DEFAULT 1,
-		archived_at   BIGINT NULL,
-		PRIMARY KEY (` + typeKeyCol + `)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-	`CREATE TABLE IF NOT EXISTS notification_attachments (
-		notification_id BIGINT NOT NULL,
-		name            VARCHAR(255) NOT NULL,
-		mime            VARCHAR(190) NOT NULL,
-		size            BIGINT NOT NULL,
-		PRIMARY KEY (notification_id, name)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-}
-
 // MigrateMetrics 建指标 raw 表与三个物化桶（幂等），并为老表补齐 MetricKeys 里新增的列。
 // 只做 ADD COLUMN，绝不重建表、绝不丢旧行；旧行新列为 NULL。
 func (d *Dialect) MigrateMetrics(ctx context.Context, db *sql.DB) error {
@@ -131,52 +91,6 @@ func (d *Dialect) MigrateMetrics(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	return nil
-}
-
-// MigrateNotifications 建通知相关表并补齐 type 列（老库缺列时加列 + 按 source 回填）。
-func (d *Dialect) MigrateNotifications(ctx context.Context, db *sql.DB) error {
-	for _, stmt := range notificationsDDL {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("执行通知建表语句失败: %w", err)
-		}
-	}
-	hasType, err := d.ColumnExists(ctx, db, "notifications", "type")
-	if err != nil {
-		return err
-	}
-	if !hasType {
-		if _, err := db.ExecContext(ctx, "ALTER TABLE notifications ADD COLUMN type VARCHAR(64) NULL"); err != nil {
-			return fmt.Errorf("补 notifications.type 列失败: %w", err)
-		}
-		if _, err := db.ExecContext(ctx, "UPDATE notifications SET type = source WHERE type IS NULL"); err != nil {
-			return fmt.Errorf("回填 notifications.type 失败: %w", err)
-		}
-	}
-	// MySQL 无 CREATE INDEX IF NOT EXISTS：重复建索引的 1061 直接忽略。
-	if _, err := db.ExecContext(ctx, "CREATE INDEX idx_notifications_type ON notifications(type)"); err != nil && !strings.Contains(err.Error(), "Duplicate key name") {
-		return fmt.Errorf("建 notifications.type 索引失败: %w", err)
-	}
-	for _, row := range defaultTypes {
-		if _, err := db.ExecContext(ctx,
-			"INSERT IGNORE INTO notification_types ("+typeKeyCol+", label, description, default_level, sort, enabled, archived_at) VALUES (?, ?, NULL, ?, ?, 1, NULL)",
-			row.key, row.label, row.level, row.sort); err != nil {
-			return fmt.Errorf("预置通知类别失败: %w", err)
-		}
-	}
-	return nil
-}
-
-type typeSeed struct {
-	key, label, level string
-	sort              int
-}
-
-var defaultTypes = []typeSeed{
-	{"watchdog", "看门狗", "urgent", 10},
-	{"monitor", "站点监控", "normal", 20},
-	{"cron", "定时播报", "normal", 30},
-	{"hermes", "Hermes", "normal", 40},
-	{"admin", "管理后台", "normal", 50},
 }
 
 // ColumnExists 用 information_schema.columns 探测列（限定当前库）。

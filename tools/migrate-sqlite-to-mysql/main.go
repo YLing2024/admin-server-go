@@ -124,7 +124,7 @@ func buildLogicalDBs(only, srcMetrics, srcNotifications string, dst dstFlags) ([
 		{
 			name: "notifications", srcPath: strings.TrimSpace(srcNotifications),
 			dstName: dst.notifName, dstDSN: dst.notifDSN,
-			tables: notificationTables, migrate: mysqlDialect().MigrateNotifications,
+			tables: notificationTables, migrate: migrateNotifications,
 		},
 	}
 	var out []logicalDB

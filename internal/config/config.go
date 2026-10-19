@@ -4,7 +4,7 @@
 // AUTH_MODE 非法回落 builtin。与旧实现的有意差异都属于「新仓库必须与旧实例隔离」的部署约定
 // （需求书 §5）：默认 PORT 改为 19265，Redis 前缀 / 采样锁 / 历史文件 / 密钥文件默认指向本仓库
 // 自己的位置，避免与线上 3100 实例互相干扰。存储自 2026-10-16 起一律 MySQL（无方言开关），
-// 两个逻辑库库名默认即云库名。差异逐条记在 docs/DB.md。
+// 指标库名默认即云库名。差异逐条记在 docs/DB.md。
 package config
 
 import (
@@ -58,11 +58,6 @@ type Config struct {
 	ShareBaseURL string
 	ShareFile    string
 
-	NotificationFilesDir string
-	// NotificationRetentionSeconds 由 ADMIN_NOTIFICATION_RETENTION_DAYS 换算（默认 180 天）。
-	NotificationRetentionDays    int
-	NotificationRetentionSeconds int
-
 	RedisURL    string
 	RedisPrefix string
 	SamplerLock string
@@ -78,14 +73,12 @@ type Config struct {
 	// ProcMaxRows 对齐 ADMIN_PROC_MAX_ROWS：进程排行最多返回的行数。
 	ProcMaxRows int
 
-	// 数据库连接参数（仅 MySQL）。两个逻辑库映射为同一实例下的两个 schema，
-	// 库名由 DB_METRICS_NAME / DB_NOTIFICATIONS_NAME 指定（默认即云库名）。
-	DBHost              string
-	DBPort              int
-	DBUser              string
-	DBPassword          string
-	DBMetricsName       string
-	DBNotificationsName string
+	// 数据库连接参数（仅 MySQL）。指标库 schema 由 DB_METRICS_NAME 指定（默认即云库名）。
+	DBHost        string
+	DBPort        int
+	DBUser        string
+	DBPassword    string
+	DBMetricsName string
 }
 
 // ConfigError 表示无法用默认值兜底的配置错误（仅新增的数据库键会返回）。
@@ -117,11 +110,6 @@ func Load(get func(string) string) (*Config, error) {
 		authMode = AuthSSO
 	}
 
-	retentionDays := 180
-	if n, err := strconv.Atoi(strings.TrimSpace(get("ADMIN_NOTIFICATION_RETENTION_DAYS"))); err == nil && n > 0 {
-		retentionDays = n
-	}
-
 	procMaxRows := 2000
 	if raw := strings.TrimSpace(get("ADMIN_PROC_MAX_ROWS")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -131,32 +119,29 @@ func Load(get func(string) string) (*Config, error) {
 
 	tmp := os.TempDir()
 	cfg := &Config{
-		RepoRoot:                     repoRoot,
-		Host:                         host,
-		Port:                         port,
-		AuthMode:                     authMode,
-		ConfigPath:                   trimOr(get("ADMIN_CONFIG_PATH"), filepath.Join(repoRoot, "config.json")),
-		UploadDir:                    trimOr(get("ADMIN_UPLOAD_DIR"), filepath.Join(repoRoot, "uploads")),
-		FileDir:                      trimOr(get("ADMIN_FILE_DIR"), "/root/files/download"),
-		AppsFile:                     trimOr(get("ADMIN_APPS_FILE"), filepath.Join(repoRoot, "data", "apps.json")),
-		AuditLog:                     trimOr(get("ADMIN_AUDIT_LOG"), filepath.Join(repoRoot, "audit.log")),
-		TermPwFile:                   trimOr(get("ADMIN_TERM_PW_FILE"), filepath.Join(os.Getenv("HOME"), ".hermes", "term_password")),
-		TermUnlock:                   parseTermUnlock(get("ADMIN_TERM_UNLOCK")),
-		ShareBaseURL:                 strings.TrimRight(strings.TrimSpace(get("ADMIN_SHARE_BASE_URL")), "/"),
-		ShareFile:                    trimOr(get("ADMIN_SHARE_FILE"), filepath.Join(repoRoot, "data", "file-shares.json")),
-		NotificationRetentionDays:    retentionDays,
-		NotificationRetentionSeconds: retentionDays * 24 * 3600,
-		RedisURL:                     trimOr(get("REDIS_URL"), "redis://127.0.0.1:6379"),
-		RedisPrefix:                  trimOr(get("ADMIN_REDIS_PREFIX"), "admin-go:session:"),
-		SamplerLock:                  trimOr(get("ADMIN_SAMPLER_LOCK"), filepath.Join(tmp, "admin-server-go-sampler.lock")),
-		HistoryFile:                  trimOr(get("ADMIN_HISTORY_FILE"), filepath.Join(tmp, "admin-server-go-history.json")),
-		TotpSecretFile:               trimOr(get("ADMIN_TOTP_SECRET_FILE"), filepath.Join(repoRoot, "data", "totp-secret.json")),
-		HermesStateDB:                trimOr(get("HERMES_STATE_DB"), filepath.Join(os.Getenv("HOME"), ".hermes", "state.db")),
-		AuthCenterBaseURL:            strings.TrimRight(strings.TrimSpace(get("AUTH_CENTER_BASE_URL")), "/"),
-		AuthCenterInternalTokenFile:  trimOr(get("AUTH_CENTER_INTERNAL_TOKEN_FILE"), filepath.Join(repoRoot, "..", "auth-server", "internal-token")),
-		ProcMaxRows:                  procMaxRows,
+		RepoRoot:                    repoRoot,
+		Host:                        host,
+		Port:                        port,
+		AuthMode:                    authMode,
+		ConfigPath:                  trimOr(get("ADMIN_CONFIG_PATH"), filepath.Join(repoRoot, "config.json")),
+		UploadDir:                   trimOr(get("ADMIN_UPLOAD_DIR"), filepath.Join(repoRoot, "uploads")),
+		FileDir:                     trimOr(get("ADMIN_FILE_DIR"), "/root/files/download"),
+		AppsFile:                    trimOr(get("ADMIN_APPS_FILE"), filepath.Join(repoRoot, "data", "apps.json")),
+		AuditLog:                    trimOr(get("ADMIN_AUDIT_LOG"), filepath.Join(repoRoot, "audit.log")),
+		TermPwFile:                  trimOr(get("ADMIN_TERM_PW_FILE"), filepath.Join(os.Getenv("HOME"), ".hermes", "term_password")),
+		TermUnlock:                  parseTermUnlock(get("ADMIN_TERM_UNLOCK")),
+		ShareBaseURL:                strings.TrimRight(strings.TrimSpace(get("ADMIN_SHARE_BASE_URL")), "/"),
+		ShareFile:                   trimOr(get("ADMIN_SHARE_FILE"), filepath.Join(repoRoot, "data", "file-shares.json")),
+		RedisURL:                    trimOr(get("REDIS_URL"), "redis://127.0.0.1:6379"),
+		RedisPrefix:                 trimOr(get("ADMIN_REDIS_PREFIX"), "admin-go:session:"),
+		SamplerLock:                 trimOr(get("ADMIN_SAMPLER_LOCK"), filepath.Join(tmp, "admin-server-go-sampler.lock")),
+		HistoryFile:                 trimOr(get("ADMIN_HISTORY_FILE"), filepath.Join(tmp, "admin-server-go-history.json")),
+		TotpSecretFile:              trimOr(get("ADMIN_TOTP_SECRET_FILE"), filepath.Join(repoRoot, "data", "totp-secret.json")),
+		HermesStateDB:               trimOr(get("HERMES_STATE_DB"), filepath.Join(os.Getenv("HOME"), ".hermes", "state.db")),
+		AuthCenterBaseURL:           strings.TrimRight(strings.TrimSpace(get("AUTH_CENTER_BASE_URL")), "/"),
+		AuthCenterInternalTokenFile: trimOr(get("AUTH_CENTER_INTERNAL_TOKEN_FILE"), filepath.Join(repoRoot, "..", "auth-server", "internal-token")),
+		ProcMaxRows:                 procMaxRows,
 	}
-	cfg.NotificationFilesDir = trimOr(get("ADMIN_NOTIFICATION_FILES_DIR"), filepath.Join(repoRoot, "data", "notification-files"))
 
 	db, err := loadDB(get)
 	if err != nil {
@@ -167,7 +152,6 @@ func Load(get func(string) string) (*Config, error) {
 	cfg.DBUser = db.user
 	cfg.DBPassword = db.password
 	cfg.DBMetricsName = db.metricsName
-	cfg.DBNotificationsName = db.notifName
 	return cfg, nil
 }
 
@@ -177,10 +161,9 @@ type dbOptions struct {
 	user        string
 	password    string
 	metricsName string
-	notifName   string
 }
 
-// loadDB 解析 MySQL 连接参数。两个逻辑库库名默认即云库名（admin_metrics / admin_notifications），
+// loadDB 解析 MySQL 连接参数。指标库 schema 默认即云库名（admin_metrics），
 // 因此常规部署只需给出 DB_HOST / DB_USER / DB_PASSWORD。
 func loadDB(get func(string) string) (dbOptions, error) {
 	host := trimOr(get("DB_HOST"), defaultDBHost)
@@ -202,7 +185,6 @@ func loadDB(get func(string) string) (dbOptions, error) {
 		user:        user,
 		password:    get("DB_PASSWORD"),
 		metricsName: trimOr(get("DB_METRICS_NAME"), defaultMetricsDBName),
-		notifName:   trimOr(get("DB_NOTIFICATIONS_NAME"), defaultNotificationsDBName),
 	}, nil
 }
 
@@ -233,8 +215,6 @@ const (
 	defaultDBHost = "127.0.0.1"
 	// defaultMetricsDBName 是指标库默认 schema。
 	defaultMetricsDBName = "admin_metrics"
-	// defaultNotificationsDBName 是通知库默认 schema。
-	defaultNotificationsDBName = "admin_notifications"
 )
 
 // SessionTTL 是 builtin 会话有效期（秒），与旧实现一致：12 小时，校验通过后滑动续期。
@@ -248,7 +228,7 @@ func (c *Config) Describe() string {
 	return strings.Join([]string{
 		fmt.Sprintf("监听 http://%s:%d", c.Host, c.Port),
 		"认证模式 " + string(c.AuthMode),
-		"数据库 mysql " + c.DBMetricsName + " + " + c.DBNotificationsName,
+		"数据库 mysql " + c.DBMetricsName,
 		"文件区 " + c.FileDir,
 	}, " | ")
 }

@@ -76,6 +76,6 @@ Express 默认给响应体算弱 `ETag`（`W/"<len>-<hash>"`）并支持条件�
 ## 三、验收口径
 
 - ①②③④ 四条修复的自测矩阵与原始输出见交付报告。
-- 「已一致」的端点（`notifications` 三端点、坏 JSON 500 文案、`registryMtime` 等）不再复述。
+- 「已一致」的端点（坏 JSON 500 文案、`registryMtime` 等）不再复述。
 - 活体采样类字段（`apps`/`services`/`system` 的内存、CPU、网络计数、`latencyMs`）因采样时刻不同天然有差异，
   不属于契约差异。

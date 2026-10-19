@@ -4,8 +4,8 @@
 **逐条对齐 HTTP 契约**，用标准库 `net/http` 实现，单二进制、低内存。
 
 职责：系统监控（实时 + 历史采样 + SSE）、软件版本与 systemd/docker 服务状态、文件区（浏览/上传/
-下载/新建/重命名/删除）、公开分享链接、通知中心（含附件与 SSE）、接口令牌管理、Web 终端口令与 ttyd
-会话管理、Hermes 历史会话只读浏览、应用探活面板。
+下载/新建/重命名/删除）、公开分享链接、接口令牌管理、Web 终端口令与 ttyd 会话管理、
+Hermes 历史会话只读浏览、应用探活面板。
 
 ## 技术栈
 
@@ -53,8 +53,6 @@ make run            # 构建并前台运行
 | `ADMIN_TERM_UNLOCK` ← 新增 | `password` | 终端口令门开关：`password`（默认，需口令换票据）/ `off`（不要求口令，登录后台即可进终端；非法值回落 `password` 并告警）。仅关闭第二道门，`authRequired` 与票据校验不变 |
 | `ADMIN_SHARE_BASE_URL` | 空 | 分享链接基址（拼 `url` 字段用） |
 | `ADMIN_SHARE_FILE` | `<root>/data/file-shares.json` | 分享账本（本地 JSON） |
-| `ADMIN_NOTIFICATION_FILES_DIR` | `<root>/data/notification-files` | 通知附件根目录 |
-| `ADMIN_NOTIFICATION_RETENTION_DAYS` | `180` | 通知保留天数（清理连带附件目录） |
 | `ADMIN_PROC_MAX_ROWS` | `2000` | 进程排行最多返回行数 |
 | `ADMIN_REDIS_PREFIX` | `admin-go:session:` | 会话 key 前缀（测试隔离用） |
 | `ADMIN_SAMPLER_LOCK` | 临时目录 `admin-server-go-sampler.lock` | 采样器互斥锁 |
@@ -69,7 +67,6 @@ make run            # 构建并前台运行
 | `DB_USER` | 必填 | MySQL 账号（缺失启动报错） |
 | `DB_PASSWORD` | 空 | MySQL 口令 |
 | `DB_METRICS_NAME` | `admin_metrics` | 指标库 schema |
-| `DB_NOTIFICATIONS_NAME` | `admin_notifications` | 通知库 schema |
 
 数据库映射、建表口径与迁移工具见 `docs/DB.md`；接口清单见 `docs/API.md`；
 与旧实现（Express）的已知差异（有意不复制 / 残余差异）见 `COMPAT.md`。

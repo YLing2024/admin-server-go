@@ -1,8 +1,8 @@
 // Package httpapi 用标准库 net/http 复刻旧实现（Express 4）的 HTTP 契约。
 //
-// 装配顺序与旧 src/index.ts 逐条对齐：请求体解析（默认 100kb，仅 POST /api/admin/notifications
-// 放宽到 24mb）→ system / auth / api-tokens / notifications / versions / term / apps / public-apps /
-// files / shares / history 各路由（顺序即优先级）→ 未知路径按 Express 默认 404 兜底。
+// 装配顺序与旧 src/index.ts 逐条对齐：请求体解析（默认 100kb）→ system / auth / api-tokens /
+// versions / term / apps / public-apps / files / shares / history 各路由（顺序即优先级）→
+// 未知路径按 Express 默认 404 兜底。
 //
 // 业务实现放在各 internal/<domain> 包，本包只负责路由分发、鉴权包装与全局行为（含鉴权前解析请求体）。
 package httpapi
@@ -44,23 +44,6 @@ type AppsService interface {
 	PublicApps(w http.ResponseWriter, r *http.Request)
 }
 
-// NotificationsService 是通知中心域（internal/notifications 实现）。
-type NotificationsService interface {
-	StartMaintenance()
-	Create(w http.ResponseWriter, r *http.Request)
-	List(w http.ResponseWriter, r *http.Request)
-	TypesList(w http.ResponseWriter, r *http.Request)
-	TypesPatch(w http.ResponseWriter, r *http.Request)
-	Read(w http.ResponseWriter, r *http.Request)
-	ReadAll(w http.ResponseWriter, r *http.Request)
-	Delete(w http.ResponseWriter, r *http.Request)
-	BulkDelete(w http.ResponseWriter, r *http.Request)
-	Stats(w http.ResponseWriter, r *http.Request)
-	Stream(w http.ResponseWriter, r *http.Request)
-	Get(w http.ResponseWriter, r *http.Request)
-	Attachment(w http.ResponseWriter, r *http.Request)
-}
-
 // FilesService 是文件区与通用上传下载域（internal/files 实现）。
 type FilesService interface {
 	Upload(w http.ResponseWriter, r *http.Request)
@@ -90,7 +73,6 @@ type Options struct {
 	Log     *slog.Logger
 	Metrics MetricsService
 	Apps    AppsService
-	Notifs  NotificationsService
 	FileSvc FilesService
 	Shares  SharesService
 }
@@ -104,7 +86,6 @@ type Server struct {
 	auth    *auth.Authenticator
 	metrics MetricsService
 	apps    AppsService
-	notifs  NotificationsService
 	fileSvc FilesService
 	shares  SharesService
 	term    *term.Service
@@ -126,7 +107,6 @@ func New(opts Options) *Server {
 		log:         opts.Log,
 		metrics:     opts.Metrics,
 		apps:        opts.Apps,
-		notifs:      opts.Notifs,
 		fileSvc:     opts.FileSvc,
 		shares:      opts.Shares,
 		term:        term.New(term.Options{Cfg: opts.Cfg, Redis: opts.Redis, Log: opts.Log}),
@@ -187,8 +167,6 @@ func (s *Server) route(w http.ResponseWriter, req *http.Request) {
 		switch rt.auth {
 		case authRequired:
 			s.auth.Require(rt.handler).ServeHTTP(w, routed)
-		case authNotificationsWrite:
-			s.auth.NotificationsWrite(rt.handler).ServeHTTP(w, routed)
 		default:
 			rt.handler.ServeHTTP(w, routed)
 		}
@@ -280,9 +258,6 @@ func (s *Server) parseBody(r *http.Request) (*http.Request, error) {
 		return r, nil
 	}
 	limit := int64(100 * 1024)
-	if r.Method == http.MethodPost && strings.TrimRight(r.URL.Path, "/") == "/api/admin/notifications" {
-		limit = 24 * 1024 * 1024
-	}
 	data, err := readLimited(r.Body, limit)
 	if err != nil {
 		return nil, err

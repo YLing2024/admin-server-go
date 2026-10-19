@@ -5,12 +5,14 @@
 > `modernc.org/sqlite` 仅保留给 `internal/history` **只读外部 Hermes `state.db`**（见 §6）。
 > 旧 SQLite 数据由独立工具 `tools/migrate-sqlite-to-mysql/` 一次性搬运。
 >
-> 建表语句的**唯一权威**是 `go-rewrite/docs/mysql-schema-cloud.md` 里 `admin_metrics` 与
-> `admin_notifications` 两库；服务端 DDL 与之一致，且只做增量迁移，绝不另立一套。
+> 建表语句的**唯一权威**是 `go-rewrite/docs/mysql-schema-cloud.md` 里 `admin_metrics` 库；服务端 DDL
+> 与之一致，且只做增量迁移，绝不另立一套。通知库（`admin_notifications`）已随通知中心功能下线
+> （2026-10-19）：服务不再连接它，云库里的三张表暂时保留（数据已清空），历史数据搬运仍由一次性
+> 工具 `tools/migrate-sqlite-to-mysql/` 负责。
 
 ## 1. 连接与配置
 
-两个逻辑库（指标 / 通知）映射为**同一 MySQL 实例下的两个 schema**，由连接串的库名选定，各自独立连接。
+服务只连接**一个逻辑库**（指标），映射为 MySQL 实例下的一个 schema，由连接串的库名选定。
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
@@ -19,19 +21,18 @@
 | `DB_USER` | 必填 | MySQL 账号；缺失启动即报错（fail fast） |
 | `DB_PASSWORD` | 空 | MySQL 口令（只进 DSN 返回值，绝不落日志） |
 | `DB_METRICS_NAME` | `admin_metrics` | 指标库 schema |
-| `DB_NOTIFICATIONS_NAME` | `admin_notifications` | 通知库 schema |
 
 - DSN 由 `internal/mysql.BuildDSN` 组装：`parseTime=false`（时间列一律整数 epoch）、`utf8mb4_unicode_ci`、
   连接/读/写超时 5s/15s/15s。连接池上限 16。
-- **两个 schema 需预先建好**：服务与迁移工具都只做**表级**增量迁移，绝不 `CREATE DATABASE`；
+- **schema 需预先建好**：服务与迁移工具都只做**表级**增量迁移，绝不 `CREATE DATABASE`；
   建库语句以云库权威文档 `go-rewrite/docs/mysql-schema-cloud.md` 为准（账号需具备对应库的权限）。
-- 启动时对两个库各跑一次增量迁移；单个库连不上只降级该库的能力（指标库不可用 = 长期留样停用；
-  通知库不可用 = 通知接口 503），不影响进程启动，与旧实现一致。
+- 启动时对指标库跑一次增量迁移；指标库连不上只降级「长期留样停用」，不影响进程启动，与旧实现一致。
 - `config.json`（含口令哈希）仍是**本地文件**，不入库、不迁移。
 
 ## 2. 表
 
-指标库 4 张表、通知库 3 张表（与 `mysql-schema-cloud.md` 同名同形）。
+指标库 4 张表（与 `mysql-schema-cloud.md` 同名同形）。通知库 3 张表（`notifications` /
+`notification_types` / `notification_attachments`）已不在服务职责内，仅由一次性搬运工具参考，见 §5。
 
 | 表 | 库 | 用途 | 键 |
 |---|---|---|---|
@@ -39,9 +40,6 @@
 | `metrics_1m` | 指标 | 分钟物化桶（`P100` = 桶内最大） | PK `bucket_start` |
 | `metrics_1h` | 指标 | 小时物化桶（`P90`，直接来自 raw） | PK `bucket_start` |
 | `metrics_1d` | 指标 | 天物化桶（`P99`，直接来自 raw） | PK `bucket_start` |
-| `notifications` | 通知 | 通知账本 | PK `id`；索引 `ts` / `read_at` / `dedup_key` / `source` / `type` |
-| `notification_types` | 通知 | 通知类别表（主键列 `key` 是保留字，全程反引号引用） | PK `key` |
-| `notification_attachments` | 通知 | 附件元信息（本体落盘） | PK `(notification_id, name)` |
 
 指标列（raw 与三个物化桶共用）：`cpu` / `mem_percent` / `mem_used` / `mem_total` / `swap_percent` /
 `psi_mem_avg10` / `psi_cpu_avg10` / `psi_io_avg10` / `net_rx_rate` / `net_tx_rate` / `disk_io_read` /
@@ -50,7 +48,7 @@
 分区的流量含在整盘里）。设备集在服务启动时探测一次并由 `store.SetDiskDevices` 写进 `MetricKeys`；运行中
 新出现的设备只计入合计列，不新增列。物化桶另有 `sample_count` / `updated_at`。
 
-> 通知 `id` 是 MySQL `BIGINT AUTO_INCREMENT`，**不是**雪花 ID；项目级约定「雪花 ID 一律字符串」在本服务
+> 指标表主键（`ts` / `bucket_start`）为 BIGINT 整数；项目级约定「雪花 ID 一律字符串」在本服务
 > 无对应字段（`/api/blog/*` 由别的后端提供）。
 
 ## 3. 迁移（只增量）
@@ -58,12 +56,10 @@
 - 全部幂等：`CREATE TABLE IF NOT EXISTS`、`ADD COLUMN`，**绝不 DROP / TRUNCATE / 重建表**；
   886k 行的指标表尤其不做整表重写。
 - 补列前先探测列是否存在：查询 `information_schema.columns`（限定 `DATABASE()`）。
-- **老库原地升级**：旧通知库缺 `type` 列 → 加列并 `UPDATE ... SET type = source WHERE type IS NULL` 回填；
-  旧指标库缺三个物化表 → `CREATE TABLE IF NOT EXISTS` 补建；旧指标表缺按盘速率列 → 逐表逐列
-  `information_schema.columns` 探测后 `ALTER TABLE ... ADD COLUMN ... DOUBLE` 补列（旧行新列为 NULL，
-  读取按缺失处理）。都不动已有数据。
+- **老库原地升级**：旧指标库缺三个物化表 → `CREATE TABLE IF NOT EXISTS` 补建；旧指标表缺按盘速率列 →
+  逐表逐列 `information_schema.columns` 探测后 `ALTER TABLE ... ADD COLUMN ... DOUBLE` 补列
+  （旧行新列为 NULL，读取按缺失处理）。都不动已有数据。
 - MySQL 无 `CREATE INDEX IF NOT EXISTS`：重复建索引的 `Duplicate key name` 直接忽略。
-- 预置通知类别（`watchdog` / `monitor` / `cron` / `hermes` / `admin`）用 `INSERT IGNORE`，不覆盖用户改动。
 
 ## 4. MySQL 行为差异（相对旧 SQLite 口径，已在方言层修正）
 
@@ -83,6 +79,9 @@
 独立 `go run` 的一次性工具，**不被服务主程序 import**。把旧 SQLite 库按表搬进 MySQL，逐表执行
 「源计数 → 拷贝 → 目标计数 → 抽样比对」；源库以 `mode=ro` 只读打开（只发 SELECT），目标库只做增量迁移
 后以**批量 upsert** 写入，可重复执行（幂等）。
+
+> 服务已于 2026-10-19 下线通知中心并不再连接通知库，但通知库的搬运链路保留在本工具内（自行携带
+> 其建表语句），以保留旧数据的一次性搬运能力。
 
 ```bash
 go run ./tools/migrate-sqlite-to-mysql \
@@ -126,8 +125,8 @@ SQLite」：**服务自身存储一律 MySQL**，没有任何自建 SQLite 库�
 | TOTP secret 文件 | 认证中心模块管理 | `<repo>/data/totp-secret.json` | 自带账号模式下的本地 secret |
 | 存储 | SQLite 文件 | MySQL（`DB_HOST` 等） | 2026-10-16 用户口径变更 |
 
-新增（旧实现没有）：`DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_METRICS_NAME` /
-`DB_NOTIFICATIONS_NAME`（MySQL 连接）、`REDIS_URL`（默认 `redis://127.0.0.1:6379`）。
+新增（旧实现没有）：`DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_METRICS_NAME`
+（MySQL 连接）、`REDIS_URL`（默认 `redis://127.0.0.1:6379`）。
 其余环境变量名与默认值以旧实现实际读取为准（见 `README.md` 与旧 `AGENTS.md`）。
 
 ## 8. 从旧实现迁移的操作建议

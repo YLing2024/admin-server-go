@@ -39,20 +39,6 @@ func Metrics(t *testing.T) *store.DB {
 	return db
 }
 
-// Notifications 建一个空的通知库 schema 并跑增量迁移，测试结束自动 DROP。
-func Notifications(t *testing.T) *store.DB {
-	t.Helper()
-	dsn := SchemaDSN(t, "notifications")
-	db, err := store.Open(context.Background(), mysql.New(), dsn, 8, func(ctx context.Context, db *sql.DB) error {
-		return mysql.New().MigrateNotifications(ctx, db)
-	})
-	if err != nil {
-		t.Fatalf("打开通知测试库失败: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
-
 // SchemaDSN 建一个唯一命名的空 schema 并返回其 MySQL DSN，测试结束自动 DROP。
 // 供需要自行打开目标的用例（如迁移工具）使用。
 func SchemaDSN(t *testing.T, prefix string) string {

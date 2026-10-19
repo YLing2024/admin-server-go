@@ -13,8 +13,6 @@ const (
 	authNone routeAuth = iota
 	// authRequired 业务鉴权（builtin 会话 / sso 头）。
 	authRequired
-	// authNotificationsWrite 通知写入通道（回环直连 / 可写令牌 / 回落业务鉴权）。
-	authNotificationsWrite
 )
 
 // apiRoute 是一条路由。pattern 既是匹配依据，也是 scripts/check-api-docs.mjs 与 docs/API.md
@@ -57,24 +55,10 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "PATCH /api/admin/api-tokens/:id", auth: authRequired, handler: s.handleAPITokensUpdate},
 		{pattern: "DELETE /api/admin/api-tokens/:id", auth: authRequired, handler: s.handleAPITokensDelete},
 
-		// ④ notifications（固定路径先于 /:id）
-		{pattern: "POST /api/admin/notifications", auth: authNotificationsWrite, handler: s.notifs.Create},
-		{pattern: "GET /api/admin/notifications", auth: authRequired, handler: s.notifs.List},
-		{pattern: "GET /api/admin/notifications/types", auth: authRequired, handler: s.notifs.TypesList},
-		{pattern: "PATCH /api/admin/notifications/types/:key", auth: authRequired, handler: s.notifs.TypesPatch},
-		{pattern: "POST /api/admin/notifications/:id/read", auth: authRequired, handler: s.notifs.Read},
-		{pattern: "POST /api/admin/notifications/read-all", auth: authRequired, handler: s.notifs.ReadAll},
-		{pattern: "DELETE /api/admin/notifications/:id", auth: authRequired, handler: s.notifs.Delete},
-		{pattern: "POST /api/admin/notifications/bulk-delete", auth: authRequired, handler: s.notifs.BulkDelete},
-		{pattern: "GET /api/admin/notifications/stats", auth: authRequired, handler: s.notifs.Stats},
-		{pattern: "GET /api/admin/notifications/stream", auth: authRequired, handler: s.notifs.Stream},
-		{pattern: "GET /api/admin/notifications/:id", auth: authRequired, handler: s.notifs.Get},
-		{pattern: "GET /api/admin/notifications/:id/files/:name", auth: authRequired, handler: s.notifs.Attachment},
-
-		// ⑤ versions
+		// ④ versions
 		{pattern: "GET /api/admin/versions", auth: authRequired, handler: s.handleVersions},
 
-		// ⑥ term
+		// ⑤ term
 		{pattern: "POST /api/admin/term/unlock", auth: authRequired, handler: s.term.Unlock},
 		{pattern: "GET /api/admin/term/mode", auth: authRequired, handler: s.term.Mode},
 		{pattern: "GET /api/admin/term/verify", handler: s.term.Verify},
@@ -82,11 +66,11 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "POST /api/admin/term/sessions/close", auth: authRequired, handler: s.term.CloseSessions},
 		{pattern: "DELETE /api/admin/term/sessions/:name", auth: authRequired, handler: s.term.KillSession},
 
-		// ⑦ apps / ⑧ public-apps
+		// ⑥ apps / ⑦ public-apps
 		{pattern: "GET /api/admin/apps", auth: authRequired, handler: s.apps.AdminApps},
 		{pattern: "GET /api/public/apps", handler: s.apps.PublicApps},
 
-		// ⑨ files
+		// ⑧ files
 		{pattern: "POST /api/admin/upload", auth: authRequired, handler: s.fileSvc.Upload},
 		{pattern: "POST /api/admin/files/upload", auth: authRequired, handler: s.fileSvc.FilesUpload},
 		{pattern: "GET /api/admin/files", auth: authRequired, handler: s.fileSvc.FilesList},
@@ -96,14 +80,14 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "DELETE /api/admin/files", auth: authRequired, handler: s.fileSvc.FilesDelete},
 		{pattern: "GET /api/admin/download", auth: authRequired, handler: s.fileSvc.Download},
 
-		// ⑩ shares
+		// ⑨ shares
 		{pattern: "POST /api/admin/files/shares", auth: authRequired, handler: s.shares.Create},
 		{pattern: "GET /api/admin/files/shares", auth: authRequired, handler: s.shares.List},
 		{pattern: "PATCH /api/admin/files/shares/:id", auth: authRequired, handler: s.shares.Update},
 		{pattern: "DELETE /api/admin/files/shares/:id", auth: authRequired, handler: s.shares.Delete},
 		{pattern: "GET /s/:token", handler: s.shares.PublicDownload},
 
-		// ⑪ history（最后，且在 errorHandler 之后）
+		// ⑩ history（最后，且在 errorHandler 之后）
 		{pattern: "GET /api/admin/history", auth: authRequired, handler: s.history.List},
 		{pattern: "GET /api/admin/history/:id", auth: authRequired, handler: s.history.Detail},
 	}

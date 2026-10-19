@@ -3,17 +3,14 @@
 package auth
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 
 	"admin-server-go/internal/config"
 	"admin-server-go/internal/httpx"
 	"admin-server-go/internal/state"
-	"admin-server-go/internal/util"
 )
 
 // SessionTTL 与旧实现一致：12 小时，校验通过后滑动续期。
@@ -128,50 +125,6 @@ func (a *Authenticator) Require(next http.Handler) http.Handler {
 	})
 }
 
-// DirectLoopback 判断请求是否为本机直连（无任何反代注入头）。
-func DirectLoopback(r *http.Request) bool {
-	addr := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		addr = h
-	}
-	addr = strings.TrimPrefix(addr, "::ffff:")
-	if addr != "127.0.0.1" && addr != "::1" {
-		return false
-	}
-	if r.Header.Get("X-Real-IP") != "" || r.Header.Get("X-Forwarded-For") != "" {
-		return false
-	}
-	return true
-}
-
-// RequestAPIToken 从请求中提取接口令牌明文：Authorization Bearer、X-Quotahub-Token、?token=。
-func RequestAPIToken(r *http.Request) string {
-	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		if t := strings.TrimSpace(h[len("Bearer "):]); t != "" {
-			return t
-		}
-	}
-	if alias := strings.TrimSpace(r.Header.Get("X-Quotahub-Token")); alias != "" {
-		return alias
-	}
-	if q := strings.TrimSpace(r.URL.Query().Get("token")); q != "" {
-		return q
-	}
-	return ""
-}
-
-// LookupAPITokenMeta 按明文查令牌表；未命中/数据异常返回 nil。
-func (a *Authenticator) LookupAPITokenMeta(ctx context.Context, token string) (*APITokenMeta, error) {
-	if token == "" {
-		return nil, nil
-	}
-	raw, err := a.Redis.Get(ctx, apiTokenPrefix+util.Sha256Hex(token))
-	if err != nil {
-		return nil, err
-	}
-	return ParseAPITokenMeta(raw), nil
-}
-
 // ParseAPITokenMeta 解析 api:token: 值的 JSON；返回 nil 表示数据异常。
 func ParseAPITokenMeta(raw string) *APITokenMeta {
 	if raw == "" {
@@ -189,33 +142,6 @@ func ParseAPITokenMeta(raw string) *APITokenMeta {
 
 // APITokenKey 返回令牌键。
 func APITokenKey(id string) string { return apiTokenPrefix + id }
-
-// NotificationsWrite 是通知写入通道鉴权：直连回环免 SSO；否则可写令牌放行，
-// 只读令牌 403，其它回落 authRequired。
-func (a *Authenticator) NotificationsWrite(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if DirectLoopback(r) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if token := RequestAPIToken(r); token != "" {
-			meta, err := a.LookupAPITokenMeta(r.Context(), token)
-			if err != nil {
-				httpx.Error(w, http.StatusInternalServerError, "会话服务异常")
-				return
-			}
-			if meta != nil {
-				if meta.CanWrite {
-					next.ServeHTTP(w, r)
-					return
-				}
-				httpx.Error(w, http.StatusForbidden, "该接口令牌为只读，无权写入通知")
-				return
-			}
-		}
-		a.Require(next).ServeHTTP(w, r)
-	})
-}
 
 func itoa(n int) string {
 	if n == 0 {

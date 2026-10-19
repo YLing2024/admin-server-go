@@ -26,7 +26,6 @@ Environment=ADMIN_REPO_ROOT=/opt/admin-server-go
 ; Environment=DB_USER=admin
 ; Environment=DB_PASSWORD=由部署环境注入
 ; Environment=DB_METRICS_NAME=admin_metrics
-; Environment=DB_NOTIFICATIONS_NAME=admin_notifications
 
 NoNewPrivileges=true
 PrivateTmp=true

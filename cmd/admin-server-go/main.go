@@ -23,7 +23,6 @@ import (
 	"admin-server-go/internal/httpapi"
 	"admin-server-go/internal/metrics"
 	"admin-server-go/internal/mysql"
-	"admin-server-go/internal/notifications"
 	"admin-server-go/internal/probe"
 	"admin-server-go/internal/shares"
 	"admin-server-go/internal/state"
@@ -84,7 +83,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	// 整盘设备集在建表/迁移前探测并登记，MetricKeys 才会带上按盘速率列。
 	store.SetDiskDevices(probe.WholeDiskDevices())
 
-	metricsDB, err := openDB(ctx, cfg, "metrics")
+	metricsDB, err := openDB(ctx, cfg)
 	if err != nil {
 		// 旧实现：metrics.db 打不开时降级为「长期留样停用」，不影响进程启动。
 		logger.Warn("指标库不可用，长期留样停用", "err", err.Error())
@@ -93,18 +92,9 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	if metricsDB != nil {
 		defer func() { _ = metricsDB.Close() }()
 	}
-	notifDB, err := openDB(ctx, cfg, "notifications")
-	if err != nil {
-		logger.Warn("通知库不可用，通知接口降级为 503", "err", err.Error())
-		notifDB = nil
-	}
-	if notifDB != nil {
-		defer func() { _ = notifDB.Close() }()
-	}
 
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
-	notifSvc := notifications.New(notifications.Options{Cfg: cfg, DB: notifDB, Log: logger})
 	fileSvc := files.New(files.Options{Cfg: cfg, Log: logger})
 	shareSvc := shares.New(shares.Options{Cfg: cfg, Files: fileSvc, Log: logger})
 
@@ -115,7 +105,6 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		Log:     logger,
 		Metrics: metricsSvc,
 		Apps:    appsSvc,
-		Notifs:  notifSvc,
 		FileSvc: fileSvc,
 		Shares:  shareSvc,
 	})
@@ -140,23 +129,15 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	// 后台任务在 listen 成功后启动（对齐旧实现 index.ts 的 listen 回调）。
 	probeSvc.StartRateSampler()
 	metricsSvc.StartSampler()
-	notifSvc.StartMaintenance()
 
 	return waitForShutdown(server, metricsSvc, probeSvc, logger)
 }
 
-// openDB 打开一个逻辑库（metrics / notifications）并跑增量迁移。
-// 库名由 logical 选定：metrics → DB_METRICS_NAME，其余 → DB_NOTIFICATIONS_NAME。
-func openDB(ctx context.Context, cfg *config.Config, logical string) (*store.DB, error) {
+// openDB 打开指标逻辑库并跑增量迁移。库名由 DB_METRICS_NAME 指定（默认即云库名）。
+func openDB(ctx context.Context, cfg *config.Config) (*store.DB, error) {
 	dialect := mysql.New()
-	name := cfg.DBMetricsName
-	migrateFn := dialect.MigrateMetrics
-	if logical == "notifications" {
-		name = cfg.DBNotificationsName
-		migrateFn = dialect.MigrateNotifications
-	}
-	dsn := mysql.BuildDSN(cfg.DBHost, cfg.DBPort, name, cfg.DBUser, cfg.DBPassword)
-	return store.Open(ctx, dialect, dsn, 16, migrateFn)
+	dsn := mysql.BuildDSN(cfg.DBHost, cfg.DBPort, cfg.DBMetricsName, cfg.DBUser, cfg.DBPassword)
+	return store.Open(ctx, dialect, dsn, 16, dialect.MigrateMetrics)
 }
 
 // waitForShutdown 优雅退出：停采样器 → 关 HTTP。

@@ -112,12 +112,3 @@ const RawRetentionSeconds = 30 * 24 * 3600
 
 // MinuteRetentionSeconds 是分钟桶保留窗口（90 天）。
 const MinuteRetentionSeconds = 90 * 24 * 3600
-
-// NotificationLevels 是允许的通知级别。
-var NotificationLevels = map[string]bool{"urgent": true, "normal": true, "digest": true}
-
-// NotificationDedupWindowSeconds 是同一 dedupKey 的去重窗口（10 分钟）。
-const NotificationDedupWindowSeconds = 10 * 60
-
-// NotificationHeartbeatMs 是通知 SSE 心跳间隔（25s）。
-const NotificationHeartbeatMs = 25000

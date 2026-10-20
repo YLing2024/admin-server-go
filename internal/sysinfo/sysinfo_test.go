@@ -1,6 +1,9 @@
 package sysinfo
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestParseSSOutput(t *testing.T) {
 	text := `State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
@@ -150,5 +153,21 @@ func TestDecodeMountField(t *testing.T) {
 	}
 	if got := decodeMountField("/plain"); got != "/plain" {
 		t.Errorf("decoded = %q", got)
+	}
+}
+
+func TestCommandFailureDegradesToFieldError(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	ports := readPorts(context.Background())
+	if ports.Total != 0 || len(ports.Items) != 0 || ports.Error == "" {
+		t.Errorf("ports should degrade to empty + error: %+v", ports)
+	}
+	systemd := readFailedUnits(context.Background())
+	if len(systemd.Failed) != 0 || systemd.Error == "" {
+		t.Errorf("systemd should degrade to empty + error: %+v", systemd)
+	}
+	logins := readLogins(context.Background())
+	if len(logins.Items) != 0 || logins.Error == "" {
+		t.Errorf("logins should degrade to empty + error: %+v", logins)
 	}
 }

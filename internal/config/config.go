@@ -79,6 +79,8 @@ type Config struct {
 	DBUser        string
 	DBPassword    string
 	DBMetricsName string
+	// DBLogsName 是 loghub 写入的日志库（只读检索用）。
+	DBLogsName string
 
 	// SSHKeysUser 是允许登录的唯一用户名（辅助命令 ssh-keys-from-admin 使用，默认 root）。
 	SSHKeysUser string
@@ -176,6 +178,7 @@ func Load(get func(string) string) (*Config, error) {
 	cfg.DBUser = db.user
 	cfg.DBPassword = db.password
 	cfg.DBMetricsName = db.metricsName
+	cfg.DBLogsName = trimOr(get("DB_LOGS_NAME"), "admin_logs")
 
 	cfg.SSHKeysUser = trimOr(get("SSH_KEYS_USER"), "root")
 	cfg.SSHKeysEnvFile = trimOr(get("SSH_KEYS_ENV_FILE"), DefaultSSHKeysEnvFile)

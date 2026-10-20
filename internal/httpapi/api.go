@@ -7,6 +7,7 @@
 package httpapi
 
 import (
+	"admin-server-go/internal/logs"
 	"io"
 	"log/slog"
 	"net/http"
@@ -76,6 +77,7 @@ type Options struct {
 	SSHKeys SSHKeysService
 	System  SystemInfoService
 	Tools   ToolsService
+	Logs    *logs.Service
 }
 
 // Server 是 HTTP 装配体。
@@ -90,6 +92,7 @@ type Server struct {
 	sshKeys SSHKeysService
 	system  SystemInfoService
 	tools   ToolsService
+	logs    *logs.Service
 	term    *term.Service
 	history *history.Service
 

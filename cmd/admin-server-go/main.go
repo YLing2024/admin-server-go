@@ -21,6 +21,7 @@ import (
 	"admin-server-go/internal/apps"
 	"admin-server-go/internal/config"
 	"admin-server-go/internal/httpapi"
+	"admin-server-go/internal/logs"
 	"admin-server-go/internal/metrics"
 	"admin-server-go/internal/mysql"
 	"admin-server-go/internal/probe"
@@ -95,6 +96,18 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		defer func() { _ = metricsDB.Close() }()
 	}
 
+	// 日志库：loghub 写入的 admin_logs，只读检索，绝不建表/迁移。
+	logsDB, logsErr := openLogsDB(ctx, cfg)
+	if logsErr != nil {
+		logger.Warn("日志库连接失败，/api/admin/logs 将返回 503", "error", logsErr)
+	} else {
+		defer func() { _ = logsDB.Close() }()
+	}
+	var logsSvc *logs.Service
+	if logsDB != nil {
+		logsSvc = logs.New(logsDB, logger)
+	}
+
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
 	sshKeysSvc := sshkeys.New(sshkeys.Options{Cfg: cfg, DB: metricsDB, Log: logger})
@@ -111,6 +124,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		SSHKeys: sshKeysSvc,
 		System:  systemSvc,
 		Tools:   toolsSvc,
+		Logs:    logsSvc,
 	})
 
 	server := &http.Server{
@@ -169,4 +183,26 @@ func waitForShutdown(server *http.Server, metricsSvc *metrics.Service, probeSvc 
 		logger.Warn("HTTP 关闭超时", "err", err.Error())
 	}
 	return nil
+}
+
+// openLogsDB 打开日志库连接池。不跑任何迁移：日志表由 loghub 拥有，管理端只读。
+func openLogsDB(ctx context.Context, cfg *config.Config) (*sql.DB, error) {
+	name := cfg.DBLogsName
+	if name == "" {
+		name = "admin_logs"
+	}
+	dsn := mysql.BuildDSN(cfg.DBHost, cfg.DBPort, name, cfg.DBUser, cfg.DBPassword)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(pingCtx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
 }

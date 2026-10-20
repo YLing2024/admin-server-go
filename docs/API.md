@@ -868,3 +868,29 @@
 | 501 | 功能未配置（如 Bitwarden 环境变量缺失） |
 | 502 | 认证中心地址未配置 / 不可达 |
 | 503 | 依赖不可用（应用数据 / 历史库） |
+
+### GET /api/admin/logs
+
+- 鉴权：`authRequired`
+- 数据源：云 MySQL 日志库（`DB_LOGS_NAME`，默认 `admin_logs`，由 loghub 写入；本接口只读）
+- 请求参数：
+  - `source`：`system`（journald，默认）| `container`（docker）| `file`（业务文件）| `access`（nginx access）| `error`（nginx error）
+  - `q`：关键字，匹配 message 与该来源的辅助列（unit/ident、container/image、source_id/path、path/method）
+  - `since`：相对时长，如 `30m` / `24h` / `7d`
+  - `limit`：默认 200，上限 1000；`offset`：默认 0
+- 成功 200：
+
+```json
+{
+  "entries": [
+    { "ts": "2026-10-20T16:21:25Z", "source": "system", "name": "nginx.service", "level": "info", "message": "..." }
+  ],
+  "hasMore": true,
+  "source": "system",
+  "limit": 200,
+  "offset": 0
+}
+```
+
+- `level` 已归一：journald 的 priority 映射为 error/warn/notice/info/debug；access 的 status 映射为 5xx=error、4xx=warn、其余 info
+- 库未配置或连不上时返回 503；参数非法返回 400

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"admin-server-go/internal/auth"
 	"admin-server-go/internal/httpx"
+	"admin-server-go/internal/logs"
 	"admin-server-go/internal/util"
 )
 
@@ -225,4 +227,67 @@ func jsNumber(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// handleLogs 处理 GET /api/admin/logs：从云 MySQL 的日志库只读检索。
+// 查询参数：source=system|container|file|access|error, q=关键字, since=ISO 或 24h/7d, limit, offset。
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if s.logs == nil {
+		httpx.Error(w, http.StatusServiceUnavailable, "日志库未配置")
+		return
+	}
+	q := r.URL.Query()
+	src := logs.Source(strings.TrimSpace(q.Get("source")))
+	if src == "" {
+		src = logs.SourceSystem
+	}
+	query := logs.Query{
+		Source: src,
+		Q:      q.Get("q"),
+		Limit:  atoiDefault(q.Get("limit"), 200),
+		Offset: atoiDefault(q.Get("offset"), 0),
+	}
+	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
+		if d, err := parseSince(raw); err == nil {
+			query.Since = time.Now().Add(-d)
+		}
+	}
+	res, err := s.logs.Query(r.Context(), query)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "日志查询失败: "+err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, res)
+}
+
+// parseSince 支持 "30m" / "24h" / "7d" 这类相对时长。
+func parseSince(raw string) (time.Duration, error) {
+	if len(raw) < 2 {
+		return 0, fmt.Errorf("bad duration %q", raw)
+	}
+	n, err := strconv.Atoi(raw[:len(raw)-1])
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("bad duration %q", raw)
+	}
+	switch raw[len(raw)-1] {
+	case 'm':
+		return time.Duration(n) * time.Minute, nil
+	case 'h':
+		return time.Duration(n) * time.Hour, nil
+	case 'd':
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	return 0, fmt.Errorf("bad unit %q", raw)
+}
+
+// atoiDefault 解析整数，失败或非正数时返回默认值。
+func atoiDefault(raw string, def int) int {
+	if strings.TrimSpace(raw) == "" {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
 }

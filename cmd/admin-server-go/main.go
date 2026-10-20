@@ -131,7 +131,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	}()
 
 	// 后台任务在 listen 成功后启动（对齐旧实现 index.ts 的 listen 回调）。
-	probeSvc.StartRateSampler()
+	probeSvc.StartSampler()
 	metricsSvc.StartSampler()
 
 	return waitForShutdown(server, metricsSvc, probeSvc, logger)
@@ -161,7 +161,7 @@ func waitForShutdown(server *http.Server, metricsSvc *metrics.Service, probeSvc 
 		metricsSvc.Stop()
 	}
 	if probeSvc != nil {
-		probeSvc.StopRateSampler()
+		probeSvc.StopSampler()
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

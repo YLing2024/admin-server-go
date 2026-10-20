@@ -2,7 +2,6 @@ package probe
 
 import (
 	"math"
-	"time"
 )
 
 // netStat 是一组网络字节数（rx / tx），既用于累计值也用于速率（字节/秒）。
@@ -32,46 +31,6 @@ type rateCounters struct {
 	disk map[string]DiskIOStat
 	rx   float64
 	tx   float64
-}
-
-// StartRateSampler 启动唯一的 1s 速率采样循环（幂等）。它统一计算每块整盘的读写速率与
-// 网络速率并发布到受锁保护的快照；REST 与 SSE 都只读该快照，因而多消费者不会互相偷基线。
-func (s *Service) StartRateSampler() {
-	s.rateMu.Lock()
-	if s.rateStarted {
-		s.rateMu.Unlock()
-		return
-	}
-	s.rateStarted = true
-	stop := make(chan struct{})
-	s.rateStop = stop
-	s.rateMu.Unlock()
-
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		// 立即采一次：启动 ~1s 内接口即可拿到累计字节，此时速率为 0。
-		s.sampleRates()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				s.sampleRates()
-			}
-		}
-	}()
-}
-
-// StopRateSampler 停止采样循环（测试与优雅退出用）；未启动时为无操作。
-func (s *Service) StopRateSampler() {
-	s.rateMu.Lock()
-	defer s.rateMu.Unlock()
-	if s.rateStop != nil {
-		close(s.rateStop)
-		s.rateStop = nil
-		s.rateStarted = false
-	}
 }
 
 // sampleRates 采一次样：读绝对计数、与上一次做差换算速率，整体发布为新快照。

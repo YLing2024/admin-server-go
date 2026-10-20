@@ -452,8 +452,10 @@ func (s *Service) collectProcesses() (*procPayload, error) {
 	nodes := make([]ProcNode, 0, len(kept))
 	for _, r := range kept {
 		cpu := r.CPU
-		if v, ok := perPid[r.PID]; ok {
-			cpu = v
+		// 采样器已产出时只用同一窗口的快照值；新进程首帧不在表里按 0，绝不回退到 ps
+		// 的「生命周期平均」pcpu（短命进程会因此虚高，破坏排行）。
+		if perPid != nil {
+			cpu = perPid[r.PID]
 		}
 		var cgroup *int
 		if _, ok := pidToService[r.PID]; ok {

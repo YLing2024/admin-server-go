@@ -82,11 +82,11 @@ func TestCollectSystemReadsSingleSnapshot(t *testing.T) {
 	}
 }
 
-// TestRateSamplerStopIsIdempotent 守住采样循环可重复启停且不 panic。
-func TestRateSamplerStopIsIdempotent(t *testing.T) {
+// TestSamplerStopIsIdempotent 守住采样循环可重复启停且不 panic。
+func TestSamplerStopIsIdempotent(t *testing.T) {
 	s := New(nil, nil)
-	s.StartRateSampler()
-	s.StartRateSampler() // 幂等：不应起第二个循环
-	s.StopRateSampler()
-	s.StopRateSampler()
+	s.StartSampler()
+	s.StartSampler() // 幂等：不应起第二个循环
+	s.StopSampler()
+	s.StopSampler()
 }

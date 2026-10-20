@@ -20,27 +20,20 @@ type Service struct {
 	cfg *config.Config
 	log *slog.Logger
 
-	// mu 保护下面全部可变采样状态。旧实现靠 Node 单线程天然串行；Go 下 HTTP 与 SSE
-	// 会并发调用，必须显式串行化，避免差分基准被并发请求撕裂成乱值。
-	mu sync.Mutex
-
 	// rateMu 保护「最近一次速率快照」与采样循环生命周期（见 rates.go）。快照是 REST 与 SSE
-	// 唯一的速率来源，由 StartRateSampler 起的唯一后台循环写入，读取方只读、不各自做差。
-	rateMu      sync.RWMutex
-	rateSnap    rateSnapshot
-	ratePrev    rateCounters
-	rateStop    chan struct{}
-	rateStarted bool
+	// 唯一的速率来源，由 StartSampler 起的唯一后台循环写入，读取方只读、不各自做差。
+	rateMu   sync.RWMutex
+	rateSnap rateSnapshot
+	ratePrev rateCounters
 
-	// cpuPerCorePrev 是上一次每核 (total, idle)，用于算每核占用。nil 表示尚无基线。
-	cpuPerCorePrev map[int]coreTicks
-
-	// procCpuSample / procCpuEma 是进程瞬时 CPU 的差分样本与 EMA 平滑缓存，
-	// 由系统卡片与进程排行共用（旧实现同样共享 state.procCpuSample / procCpuEma）。
-	procCpuSample map[int]procSample
-	procCpuEma    map[int]float64
-	totalEmaPrev  float64
-	totalEmaInit  bool
+	// sampleMu 保护 CPU / 内存 / 负载快照与上一份 CPU 基线。HTTP 请求只读快照，
+	// 绝不更新 samplePrev；采样窗口固定由后台 ticker 推进。
+	sampleMu      sync.RWMutex
+	sampleSnap    hostSnapshot
+	samplePrev    *cpuState
+	sampleStop    chan struct{}
+	sampleDone    chan struct{}
+	sampleStarted bool
 }
 
 // coreTicks 是单个核的累计时钟滴答（内核口径）。
@@ -49,22 +42,14 @@ type coreTicks struct {
 	idle  float64
 }
 
-// procSample 是单个进程上一次的累计 CPU 滴答与系统总滴答。
-type procSample struct {
-	cpu   float64
-	total float64
-}
-
 // New 构造采集器。
 func New(cfg *config.Config, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		cfg:           cfg,
-		log:           log,
-		procCpuSample: map[int]procSample{},
-		procCpuEma:    map[int]float64{},
+		cfg: cfg,
+		log: log,
 	}
 }
 

@@ -1,7 +1,6 @@
 package probe
 
 import (
-	"math"
 	"os"
 	"regexp"
 	"runtime"
@@ -12,28 +11,15 @@ import (
 
 /* ============ 原始计数采样（纯读 /proc，不触碰差分状态） ============ */
 
-// CPUSample 返回全部核聚合的 (idle, total) 时钟滴答。
-// 口径对齐旧实现 os.cpus()：total 只累加 user/nice/system/idle/irq（不含 iowait/softirq），idle 取 idle。
-// 聚合行各列本就是各核之和，故与逐核累加等价。
+// CPUSample 返回全部核聚合的 (idle, total) 时钟滴答，供历史采样使用。
+// 与实时采样共用 parseCPUStat 的列口径（total 含 user..steal，idle 含 iowait），
+// 保证趋势图与系统卡片对得上；历史侧的平滑只发生在 metrics 聚合层。
 func CPUSample() (idle, total float64) {
-	data, err := os.ReadFile("/proc/stat")
+	agg, _, err := readCPUTicks()
 	if err != nil {
 		return 0, 0
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.HasPrefix(line, "cpu ") {
-			continue
-		}
-		fields := splitFields(line)
-		nums := parseFields(fields[1:])
-		if len(nums) < 5 {
-			return 0, 0
-		}
-		// user, nice, system, idle, iowait, irq, ...
-		all := nums[0] + nums[1] + nums[2] + nums[3] + nums[5]
-		return nums[3], all
-	}
-	return 0, 0
+	return agg.idle, agg.total
 }
 
 // NetSample 累加 /proc/net/dev 所有接口的 rx_bytes / tx_bytes。
@@ -140,91 +126,36 @@ func DiskIOSample() (read, write float64) {
 	return total.ReadBytes, total.WriteBytes
 }
 
-/* ============ 每核 CPU 占用 ============ */
+/* ============ CPU / 负载（只读后台快照） ============ */
 
 // maxCores 限制返回的每核条目数（超出截断；cores 字段仍报真实核数）。
 const maxCores = 8
 
-// cpuPerCoreSample 读 /proc/stat 的 cpuN 行，与上次采样做差按 (Δtotal − Δidle)/Δtotal×100 计算。
-// idle 口径含 iowait（内核口径，含内核与 IO 等待时间）；读取失败返回空数组，同时保留旧基线不动。
-func (s *Service) cpuPerCoreSample() []map[string]any {
-	data, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return []map[string]any{}
-	}
-	type core struct {
-		id    int
-		total float64
-		idle  float64
-	}
-	var cur []core
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.HasPrefix(line, "cpu") || strings.HasPrefix(line, "cpu ") {
-			continue
-		}
-		cols := splitFields(line)
-		if len(cols) < 9 || !isDigits(cols[0][3:]) {
-			continue
-		}
-		nums := parseFields(cols[1:])
-		if len(nums) < 8 {
-			continue
-		}
-		id, err := strconv.Atoi(cols[0][3:])
-		if err != nil {
-			continue
-		}
-		cur = append(cur, core{
-			id:    id,
-			total: nums[0] + nums[1] + nums[2] + nums[3] + nums[4] + nums[5] + nums[6] + nums[7],
-			idle:  nums[3] + nums[4],
-		})
-	}
-
-	cores := make([]map[string]any, 0, maxCores)
-	limit := len(cur)
-	if limit > maxCores {
-		limit = maxCores
-	}
-	for _, c := range cur[:limit] {
-		usage := 0.0
-		if prev, ok := s.cpuPerCorePrev[c.id]; ok {
-			dt := c.total - prev.total
-			if dt > 0 {
-				usage = ((dt - (c.idle - prev.idle)) / dt) * 100
-			}
-		}
-		usage = math.Max(0, math.Min(100, usage))
-		cores = append(cores, map[string]any{"id": c.id, "usage_percent": round1(usage)})
-	}
-	// 基线按全量核更新（不只截断后的前 8 个）。
-	next := make(map[int]coreTicks, len(cur))
-	for _, c := range cur {
-		next[c.id] = coreTicks{total: c.total, idle: c.idle}
-	}
-	s.cpuPerCorePrev = next
-	return cores
-}
-
+// getCPUInfo 从后台快照组装 CPU 卡片。usage_percent 与 per_core 来自同一对 /proc/stat
+// 快照（total 取 cpu 聚合行、per_core 取 cpuN 行），不再做 EMA，也不再因请求触发采样。
 func (s *Service) getCPUInfo() map[string]any {
+	snap := s.currentHostSnapshot()
+	cores := runtime.NumCPU()
+	perCore := make([]map[string]any, 0, len(snap.perCore))
+	for _, c := range snap.perCore {
+		perCore = append(perCore, map[string]any{"id": c.id, "usage_percent": c.percent})
+	}
 	return map[string]any{
 		"model":         cpuModel(),
-		"usage_percent": s.collectAllProcCPU().totalPct,
-		"cores":         runtime.NumCPU(),
-		"per_core":      s.cpuPerCoreSample(),
-		"loadavg":       loadavg(),
+		"usage_percent": snap.cpuPercent,
+		"cores":         cores,
+		"per_core":      perCore,
+		"loadavg":       []float64{snap.loadavg[0], snap.loadavg[1], snap.loadavg[2]},
+		"load_percent":  snap.loadPercent,
 	}
 }
 
 /* ============ 系统信息采集 ============ */
 
 // CollectSystem 实时采集系统信息；返回的 map 直接就是 GET /api/admin/system 的响应体。
-// 失败一律以零值兜底（旧实现同样逐段 try/catch），故 error 恒为 nil。
+// CPU / 内存 / 负载只读后台快照，请求路径不推进任何差分基线；其余段失败一律零值兜底。
 func (s *Service) CollectSystem() (map[string]any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	mem := ReadMeminfo()
+	mem := s.currentHostSnapshot().mem
 	percent := 0.0
 	if mem.Total > 0 {
 		percent = round1((mem.Used / mem.Total) * 100)
@@ -314,19 +245,6 @@ func getProcesses() map[string]any {
 		}
 	}
 	return proc
-}
-
-func loadavg() []float64 {
-	out := []float64{0, 0, 0}
-	data, err := os.ReadFile("/proc/loadavg")
-	if err != nil {
-		return out
-	}
-	cols := splitFields(strings.TrimSpace(string(data)))
-	for i := 0; i < 3 && i < len(cols); i++ {
-		out[i] = atof(cols[i])
-	}
-	return out
 }
 
 func uptimeSeconds() float64 {

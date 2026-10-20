@@ -131,6 +131,10 @@ type diskioBaseline struct {
 	write float64
 }
 
+// historyCPUEMAAlpha 是历史趋势的 CPU 平滑系数。实时值（系统卡片 / 进程排行）不做平滑，
+// 只在入库这一层抑制历史点抖动；该平滑不会回灌到任何接口的实时数据。
+const historyCPUEMAAlpha = 0.4
+
 // sampleHistory 采一个历史点：CPU/内存为百分比，网速与磁盘 I/O 为两次采样差值换算的速率。
 // 它直接读原始计数（不经 /api/admin/system 的独立采样状态），两条链互不干扰。
 func (s *Service) sampleHistory() {
@@ -161,7 +165,7 @@ func (s *Service) sampleHistory() {
 			v := h.cpuEma
 			prev = &v
 		}
-		h.cpuEma = util.Ema(prev, raw, probe.CPUEMAAlpha)
+		h.cpuEma = util.Ema(prev, raw, historyCPUEMAAlpha)
 		h.cpuEmaInit = true
 		cpuPercent = round1(h.cpuEma)
 	}

@@ -42,7 +42,7 @@ var sourceSpec = map[Source]struct {
 		table:       "http_access",
 		nameExpr:    "remote_addr",
 		levelExpr:   "status",
-		messageExpr: "CONCAT(method, ' ', path, ' → ', status, ' ', bytes, 'B ', ROUND(req_time,3), 's')",
+		messageExpr: "CONCAT(IFNULL(method,'-'), ' ', IFNULL(path,'-'), ' → ', IFNULL(status,0), ' · ', IFNULL(bytes,0), 'B · ', ROUND(IFNULL(req_time,0),3), 's')",
 		extraSearch: []string{"path", "method"},
 	},
 	SourceError: {table: "http_error", nameExpr: "'nginx'", levelExpr: "level", messageExpr: "message"},

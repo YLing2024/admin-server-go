@@ -115,6 +115,7 @@ func New(opts Options) *Server {
 		sshKeys:     opts.SSHKeys,
 		system:      opts.System,
 		tools:       opts.Tools,
+		logs:        opts.Logs,
 		term:        term.New(term.Options{Cfg: opts.Cfg, Redis: opts.Redis, Log: opts.Log}),
 		history:     history.New(history.Options{Cfg: opts.Cfg, Log: opts.Log}),
 		totpLimiter: auth.NewRateLimiter(5, []int{60, 300, 900}),

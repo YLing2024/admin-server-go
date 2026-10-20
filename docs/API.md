@@ -131,6 +131,106 @@
   不随请求次数重置（多客户端 / 多标签 / SSE 并发读到的是一致的数值）；快照尚未产出时速率一律 `0`。磁盘累计字节按设备名判定整盘，分区（`vda1`、`nvme0n1p1`）不计入。
 - 副作用：同步写入历史采样 buffer（趋势图数据源）。幂等：是。限流：无。
 
+### GET /api/admin/system/info
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/system/info"`
+- 成功 200（数组字段缺失时为空数组；`temperatures` 无热区时省略）：
+
+```json
+{
+  "os": "Ubuntu 24.04.1 LTS",
+  "kernel": "6.12.107",
+  "arch": "x86_64",
+  "hostname": "example",
+  "bootTime": 1760000000000,
+  "uptimeSeconds": 1055800,
+  "load": [0.42, 0.51, 0.63],
+  "cpuModel": "…",
+  "cpuCores": 8,
+  "memory": { "total": 17000000000, "available": 8000000000, "used": 9000000000, "cached": 2100000000 },
+  "swap": { "total": 0, "used": 0 },
+  "disks": [
+    { "mount": "/", "filesystem": "/dev/vda1", "fstype": "ext4",
+      "total": 500000000000, "used": 230000000000, "free": 250000000000,
+      "percent": 46, "inodePercent": 12.3 }
+  ],
+  "ports": {
+    "total": 18,
+    "items": [{ "port": 22, "process": "sshd", "pid": 812, "address": "0.0.0.0" }],
+    "error": ""
+  },
+  "systemd": { "failed": [{ "name": "foo.service", "description": "…" }], "error": "" },
+  "logins": { "items": [{ "user": "root", "ip": "127.0.0.1", "time": "Tue Oct 20 09:00 still logged in" }], "error": "" },
+  "temperatures": [{ "zone": "thermal_zone0", "type": "x86_pkg_temp", "celsius": 42.5 }]
+}
+```
+
+- 字段与来源：
+
+  | 字段 | 类型 | 语义 / 来源 |
+  |---|---|---|
+  | `os` / `kernel` | string | `/etc/os-release` 的 `PRETTY_NAME`（缺失回退 `NAME + VERSION`）；`/proc/sys/kernel/osrelease` |
+  | `arch` | string | `runtime.GOARCH`，展示时映射为 `uname -m` 风格（`amd64`→`x86_64`、`arm64`→`aarch64`、`386`→`i386`） |
+  | `hostname` | string | `os.Hostname()` |
+  | `bootTime` | number | 启动时间，**epoch 毫秒**（`/proc/stat` 的 `btime`；缺失时用当前时间 − uptime 补齐） |
+  | `uptimeSeconds` | number | 运行秒数（`/proc/uptime`） |
+  | `load` | number[] | 1/5/15 分钟负载（`/proc/loadavg` 前三列；读不到为 `[0,0,0]`） |
+  | `cpuModel` / `cpuCores` | string / number | `/proc/cpuinfo` 型号；`runtime.NumCPU()` 逻辑核数 |
+  | `memory` | object | 字节：`total`、`available`（`MemAvailable`）、`used`（`total − available`）、`cached`（`Buffers + Cached`） |
+  | `swap` | object | 字节：`total` / `used`（`SwapTotal − SwapFree`） |
+  | `disks` | array | `/proc/self/mounts` 中 device 以 `/dev/` 开头的真实块设备挂载点，`syscall.Statfs` 读容量；跳过 `tmpfs` / `overlay` / `devtmpfs` / `squashfs` / `iso9660` / loop 设备与重复挂载点。`percent`、`inodePercent` 保留一位小数 |
+  | `ports` | object | `ss -tlnp`：`total` 为全部监听项数，`items` 按端口升序最多 15 条（`port` / `process` / `pid` / `address`） |
+  | `systemd` | object | `systemctl --failed --no-legend --plain`：`failed[]` 含 `name` / `description` |
+  | `logins` | object | `last -n 5 -w`：`items[]` 含 `user` / `ip` / `time`（`time` 为 `last` 原始文本，避免 locale 解析；`reboot`/`shutdown`/`wtmp` 伪记录被过滤） |
+  | `temperatures` | array（可选） | `/sys/class/thermal/thermal_zone*/temp` 存在时才返回；`celsius` 保留一位小数 |
+
+- 降级语义：`ss` / `systemctl` / `last` 任一失败（命令缺失、超时、非零退出）只让对应对象的数组为空并在该对象的 `error` 写原因；
+  **接口仍返回 200**，静态字段仍正常返回。每条外部命令超时 1500ms，三条并发执行。
+- 缓存：成功采集的快照在进程内缓存 60s；进程排行接口不缓存。
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 401 | 未登录 / 会话失效 |
+
+- 副作用：只读 `/proc`、`/sys`、`/etc/os-release` 与三条只读命令；不写库。幂等：是。限流：无。
+
+### GET /api/admin/system/processes
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/system/processes"`
+- 成功 200：
+
+  ```json
+  {
+    "processes": [
+      { "pid": 123, "name": "nginx", "cpuPercent": 12.3, "memMB": 45.2, "command": "nginx: worker process" }
+    ]
+  }
+  ```
+
+  | 字段 | 类型 | 语义 |
+  |---|---|---|
+  | `pid` | number | 进程 PID |
+  | `name` | string | `/proc/<pid>/status` 的 `Name`（缺失回退 `/proc/<pid>/stat` 的 comm） |
+  | `cpuPercent` | number | 采样区间（500ms）内占**整机** CPU 的百分比，保留一位小数；单进程上限 100 |
+  | `memMB` | number | `VmRSS` 换算的 MB，保留一位小数 |
+  | `command` | string | `/proc/<pid>/cmdline`（NUL 转空格，最多 300 字符；不读 `environ`） |
+
+- 排序与去重：先按 `cpuPercent` 取前 10，再按 `memMB` 取前 10，按 `pid` 去重合并（CPU 榜在前），最多 20 条。
+  CPU 值由两次采样（间隔 500ms）的 `/proc/stat` 与 `/proc/<pid>/stat` 滴答差计算，全部进程占比之和不超过 100。
+- 降级：`/proc` 不可读时返回 `{ "processes": [], "error": "…" }`，状态码仍为 200。
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 401 | 未登录 / 会话失效 |
+
+- 副作用：两次 `/proc` 只读遍历（间隔 500ms）；不调用 `ps`、不读写文件系统。幂等：是（值随采样时刻变化）。限流：无。
+
 ### GET /api/admin/system/history
 
 - 鉴权：`authRequired`

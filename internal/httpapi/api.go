@@ -42,6 +42,12 @@ type AppsService interface {
 	PublicApps(w http.ResponseWriter, r *http.Request)
 }
 
+// SystemInfoService 是「系统信息」域（internal/sysinfo 实现）：只读概况与 Top 进程。
+type SystemInfoService interface {
+	Info(w http.ResponseWriter, r *http.Request)
+	Processes(w http.ResponseWriter, r *http.Request)
+}
+
 // SSHKeysService 是 SSH 公钥白名单管理域（internal/sshkeys 实现）。
 type SSHKeysService interface {
 	List(w http.ResponseWriter, r *http.Request)
@@ -59,6 +65,7 @@ type Options struct {
 	Metrics MetricsService
 	Apps    AppsService
 	SSHKeys SSHKeysService
+	System  SystemInfoService
 }
 
 // Server 是 HTTP 装配体。
@@ -71,6 +78,7 @@ type Server struct {
 	metrics MetricsService
 	apps    AppsService
 	sshKeys SSHKeysService
+	system  SystemInfoService
 	term    *term.Service
 	history *history.Service
 
@@ -91,6 +99,7 @@ func New(opts Options) *Server {
 		metrics:     opts.Metrics,
 		apps:        opts.Apps,
 		sshKeys:     opts.SSHKeys,
+		system:      opts.System,
 		term:        term.New(term.Options{Cfg: opts.Cfg, Redis: opts.Redis, Log: opts.Log}),
 		history:     history.New(history.Options{Cfg: opts.Cfg, Log: opts.Log}),
 		totpLimiter: auth.NewRateLimiter(5, []int{60, 300, 900}),

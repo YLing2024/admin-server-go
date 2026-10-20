@@ -27,6 +27,7 @@ import (
 	"admin-server-go/internal/sshkeys"
 	"admin-server-go/internal/state"
 	"admin-server-go/internal/store"
+	"admin-server-go/internal/sysinfo"
 )
 
 func main() {
@@ -96,6 +97,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
 	sshKeysSvc := sshkeys.New(sshkeys.Options{Cfg: cfg, DB: metricsDB, Log: logger})
+	systemSvc := sysinfo.New(logger)
 
 	handler := httpapi.New(httpapi.Options{
 		Cfg:     cfg,
@@ -105,6 +107,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		Metrics: metricsSvc,
 		Apps:    appsSvc,
 		SSHKeys: sshKeysSvc,
+		System:  systemSvc,
 	})
 
 	server := &http.Server{

@@ -126,14 +126,49 @@ func parseFailedUnits(text string) []FailedUnit {
 	return units
 }
 
-// readLogins 执行 `last -n 5 -w`；失败返回空数组 + error。
-// 只保留真实用户登录，过滤 reboot/shutdown/wtmp 这类伪记录。
+// readLogins 优先执行 `last -n 5 -w`；本机若没有 last/wtmp（精简镜像常见），
+// 回退到 journald 的 sshd 记录，避免该卡片长期显示「采集失败」。
 func readLogins(parent context.Context) Logins {
 	out, err := runCommand(parent, "last", "-n", "5", "-w")
-	if err != nil {
-		return Logins{Items: []LoginItem{}, Error: err.Error()}
+	if err == nil {
+		if items := parseLastOutput(out); len(items) > 0 {
+			return Logins{Items: items}
+		}
 	}
-	return Logins{Items: parseLastOutput(out)}
+	jout, jerr := runCommand(parent, "journalctl", "-u", "ssh", "-u", "sshd",
+		"--since", "7 days ago", "-o", "short-iso", "--no-pager")
+	if jerr != nil {
+		if err != nil {
+			return Logins{Items: []LoginItem{}, Error: err.Error()}
+		}
+		return Logins{Items: []LoginItem{}, Error: jerr.Error()}
+	}
+	return Logins{Items: parseSSHJournal(jout)}
+}
+
+// sshAcceptedRe 匹配 journald 的 sshd 成功登录行：
+// `2026-10-20T23:05:15+08:00 host sshd-session[1]: Accepted publickey for root from 1.2.3.4 port 5 ssh2`
+var sshAcceptedRe = regexp.MustCompile(`^(\S+)\s+\S+\s+\S+:\s+Accepted\s+\S+\s+for\s+(\S+)\s+from\s+(\S+)\s+port\s+(\d+)`)
+
+// parseSSHJournal 从 journalctl 输出里提取成功登录，按时间倒序保留最近 5 条。
+// Time 用 ISO 时间戳，Time 文本与 `last` 分支不同属预期（前端只当字符串展示）。
+func parseSSHJournal(text string) []LoginItem {
+	items := []LoginItem{}
+	for _, line := range strings.Split(text, "\n") {
+		m := sshAcceptedRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		items = append(items, LoginItem{Time: m[1], User: m[2], IP: m[3]})
+	}
+	if len(items) > 5 {
+		items = items[len(items)-5:]
+	}
+	// journal 输出是旧的在前，这里翻成新的在前。
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
+	}
+	return items
 }
 
 // parseLastOutput 解析 `last -w`：用户 / 终端 / 主机 / 时间（原始文本）。

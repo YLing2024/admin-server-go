@@ -48,6 +48,12 @@
 | `total_threads` | 全部进程线程数之和（整数，截断前口径）；与 `count` 是**两个口径，不得混算** |
 | `total_cgroup_mb` | `system.slice` 的 cgroup 真值（MB，整数） |
 | `total_cpu` | 系统**总** CPU 占用（%），**不是**列表之和 |
+| `cpu.usage_15s` / `cpu.usage_60s` | 15 秒 / 60 秒窗口的 CPU 占用均值（%，一位小数） |
+| `cpu.run_queue` / `cpu.blocked` | `/proc/stat` 的运行队列 / IO 阻塞进程数（整数） |
+| `cpu.top_movers[].delta_percent` | 最近 15 秒窗口内该进程消耗的 CPU 占整机可用时间百分比 |
+| `top_services[].cpu_percent` | 该 systemd 单元最近一个 tick 的 CPU 占整机可用时间百分比 |
+| `top_services[].mem_mb` | 该 systemd 单元 cgroup 内存真值（MB，整数）；读不到为 `null` |
+| `stall_score` | 0–100 卡顿指数（一位小数）；`stall_level` 为对应中文档位 |
 | `mem_percent` / `cpu.usage_percent` / `cpu.load_percent` | 百分比（0–100） |
 
 > 三个内存数（`total_mem_mb` / `total_cgroup_mb` / `free` 口径）都「对」，但**口径不同**：RSS 含共享页重复计算、cgroup 含页缓存。界面上必须并列标注，不能混用。
@@ -91,7 +97,16 @@
 
 ```json
 {
-  "cpu": { "usage_percent": 12.3, "per_core": [{ "id": 0, "usage_percent": 8.1 }], "model": "…", "cores": 8, "loadavg": [0.5, 0.4, 0.3], "load_percent": 6.3 },
+  "cpu": {
+    "usage_percent": 12.3,
+    "usage_15s": 12.1,
+    "usage_60s": 10.8,
+    "run_queue": 4,
+    "blocked": 0,
+    "per_core": [{ "id": 0, "usage_percent": 8.1 }],
+    "top_movers": [{ "pid": 1234, "name": "compile", "delta_percent": 62.0, "current_percent": 63.5 }],
+    "model": "…", "cores": 8, "loadavg": [0.5, 0.4, 0.3], "load_percent": 6.3
+  },
   "memory": { "percent": 47, "used": 7239, "available": 8000, "buffCache": 2100, "free": 1000, "total": 16000,
               "swapTotal": 0, "swapUsed": 0, "swapFree": 0, "swapPercent": 0, "zram": null },
   "disk": { "mount": "/", "used": 120, "total": 500, "free": 380, "percent": 24 },
@@ -104,12 +119,23 @@
   "disk_io": { "read_rate": 0, "write_rate": 0, "read_bytes": 0, "write_bytes": 0 },
   "processes": { "running": 1, "total": 344 },
   "psi": { "memory": { "some": { "avg10": 0 } }, "cpu": { "some": { "avg10": 1 } }, "io": { "some": { "avg10": 0 } } },
+  "top_services": [{ "unit": "hermes-gateway.service", "cpu_percent": 12.3, "mem_mb": 550 }],
+  "stall_score": 6.2,
+  "stall_level": "顺畅",
   "uptime": 123456, "os": "Linux …", "hostname": "…"
 }
 ```
 
 - CPU 口径：`cpu.usage_percent` 与 `cpu.per_core` 同源于后台采样器的同一对 `/proc/stat` 快照（总量取 `cpu ` 聚合行、每核取 `cpuN` 行），不做 EMA；采样间隔默认 1 秒（`PROBE_INTERVAL_SEC`，最小 1），窗口不足 1 秒的样本直接丢弃。HTTP 请求只读快照，不会推进采样基线，因此连续调用与静置后调用结果一致。
 - `cpu.load_percent`：`load1 ÷ 逻辑核数 × 100`（一位小数）；`loadavg` 仍为 `/proc/loadavg` 原始 1/5/15 分钟负载。
+- `cpu.usage_15s` / `cpu.usage_60s`：同一采样 tick 序列的 15 秒 / 60 秒均值（固定长度环形缓冲，容量按 `PROBE_INTERVAL_SEC` 换算），启动初期返回已积累样本的均值；`usage_percent` 仍只表示最近一个 tick。
+- `cpu.run_queue` / `cpu.blocked`：取自同一个 `/proc/stat` 的 `procs_running` / `procs_blocked`。`run_queue > cores` 表示已在排队；`blocked > 0` 表示有进程卡在 IO。
+- `cpu.top_movers`：最近 15 秒 `Δ(utime+stime)` 最大的 5 个进程（按进程 CPU 同一整机口径换算为 `delta_percent`）。窗口内出现后又退出的进程仍保留在榜内并标 `"exited": true`，其 `current_percent` 为 0；`current_percent` 为最近一个 tick 的进程占用。
+- `top_services`：`system.slice` 下各 `*.service` 的 cgroup v2 `cpu.stat` 中 `usage_usec` 两 tick 做差得到的 CPU 占比，最多 10 个。`cpu_percent` 按整机可用 CPU 时间归一（与进程 CPU 同口径，单核满载约 `100 ÷ 核数`）；`mem_mb` 读 `memory.current`，读不到为 `null`。
+- `stall_score` / `stall_level`：由同一 tick 的 PSI（`some.avg60`）与运行队列合成的 0–100 卡顿指数：
+  `0.40×min(psi_cpu,100) + 0.30×min(psi_io,100) + 0.20×min(psi_mem,100) + 0.10×min(run_queue÷cores×100,100)`。
+  `<20` 为 `顺畅`、`20–50` 为 `有压力`、`>50` 为 `明显卡顿`；权重是后端常量，前端只展示文案。
+- 以上新增字段全部由后台 1 秒采样器产出（含 `psi` 也取该 tick 的快照），请求路径不读取 `/proc` 或 cgroup。
 
 - 错误码：
 

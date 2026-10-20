@@ -20,7 +20,11 @@
 | `DB_PORT` | `3306` | MySQL 端口 |
 | `DB_USER` | 必填 | MySQL 账号；缺失启动即报错（fail fast） |
 | `DB_PASSWORD` | 空 | MySQL 口令（只进 DSN 返回值，绝不落日志） |
-| `DB_METRICS_NAME` | `admin_metrics` | 指标库 schema |
+| `DB_METRICS_NAME` | `admin_metrics` | 指标库 schema（`ssh_key` 也在该库） |
+| `SSH_KEYS_USER` | `root` | 辅助命令允许登录的唯一用户名 |
+| `SSH_KEYS_ENV_FILE` | `/etc/ssh-keys-from-admin.env` | 辅助命令在 sshd 下读取凭证的文件（sshd 不继承服务环境） |
+| `SSH_KEYS_DB_HOST` / `_PORT` / `_NAME` | 回退 `DB_*` | 辅助命令的只读连接目标 |
+| `SSH_KEYS_DB_USER` / `_PASSWORD` | 回退 `DB_USER` / `DB_PASSWORD` | 辅助命令的只读账号；权限只需 `SELECT` |
 
 - DSN 由 `internal/mysql.BuildDSN` 组装：`parseTime=false`（时间列一律整数 epoch）、`utf8mb4_unicode_ci`、
   连接/读/写超时 5s/15s/15s。连接池上限 16。
@@ -40,6 +44,7 @@
 | `metrics_1m` | 指标 | 分钟物化桶（`P100` = 桶内最大） | PK `bucket_start` |
 | `metrics_1h` | 指标 | 小时物化桶（`P90`，直接来自 raw） | PK `bucket_start` |
 | `metrics_1d` | 指标 | 天物化桶（`P99`，直接来自 raw） | PK `bucket_start` |
+| `ssh_key` | 指标 | SSH 公钥白名单（管理端唯一事实源，sshd 实时查询） | PK `id`；UK `fingerprint` |
 
 指标列（raw 与三个物化桶共用）：`cpu` / `mem_percent` / `mem_used` / `mem_total` / `swap_percent` /
 `psi_mem_avg10` / `psi_cpu_avg10` / `psi_io_avg10` / `net_rx_rate` / `net_tx_rate` / `disk_io_read` /
@@ -51,9 +56,35 @@
 > 指标表主键（`ts` / `bucket_start`）为 BIGINT 整数；项目级约定「雪花 ID 一律字符串」在本服务
 > 无对应字段（`/api/blog/*` 由别的后端提供）。
 
+### 2.1 `ssh_key`（SSH 公钥白名单）
+
+```sql
+CREATE TABLE IF NOT EXISTS ssh_key (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  title         VARCHAR(100)  NOT NULL,
+  public_key    TEXT          NOT NULL,
+  fingerprint   CHAR(64)      NOT NULL,          -- SHA256(blob) 的 hex，用于去重
+  key_type      VARCHAR(32)   NOT NULL,
+  comment       VARCHAR(200)  NOT NULL DEFAULT '',
+  enabled       TINYINT(1)    NOT NULL DEFAULT 1,
+  created_at    DATETIME      NOT NULL,
+  last_used_at  DATETIME      NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_fingerprint (fingerprint)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+- `public_key` 存归一化后的 `type base64 comment` 单行（sshd 直接读取），指纹列存 hex；接口对外展示
+  `SHA256:` + 无填充 base64（与 `ssh-keygen -lf` 一致）。
+- `created_at` 写入时取 `NOW()`；`last_used_at` 由辅助命令在收到 sshd `%f` 时尽力回写（失败不影响输出）。
+- 表由服务启动时的增量迁移创建；辅助命令**不建表、不写表**（只 `SELECT` 与一次可选的 `UPDATE last_used_at`），
+  因此只读账号若严格只给 `SELECT`，只是「最近使用」不更新，登录不受影响。
+- 管理端最多 20 行，上限在应用层校验；数据库不设 CHECK，避免与旧版本 MySQL 的兼容性分歧。
+
 ## 3. 迁移（只增量）
 
 - 全部幂等：`CREATE TABLE IF NOT EXISTS`、`ADD COLUMN`，**绝不 DROP / TRUNCATE / 重建表**；
+  `ssh_key` 与指标表在同一轮启动迁移里创建（先指标、后公钥，互不依赖）。
   886k 行的指标表尤其不做整表重写。
 - 补列前先探测列是否存在：查询 `information_schema.columns`（限定 `DATABASE()`）。
 - **老库原地升级**：旧指标库缺三个物化表 → `CREATE TABLE IF NOT EXISTS` 补建；旧指标表缺按盘速率列 →

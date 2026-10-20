@@ -1,5 +1,6 @@
 # 构建产物
 /admin-server-go
+/ssh-keys-from-admin
 /dist/
 
 # 运行时数据（可能含密钥 / 真实口令 / 分享 token），绝不入库

@@ -58,6 +58,7 @@
 - **ID 类型**：
   - 接口令牌 `id`：**string**（`sha256(token)` 十六进制），令牌明文仅生成时返回一次。
   - 会话 `id`：**string**（会话 token）；历史会话 `id`：**string**（Hermes 会话 id）。
+  - SSH 公钥 `id`：**string**（`ssh_key.id` 的十进制字符串；BIGINT 转 Number 可能丢精度）。
   - **项目级约定**：博客等模块的**雪花 ID（`public_id`）一律为字符串，禁止转 Number**（会丢精度）；本服务当前无雪花 ID 字段，`/api/blog/*` 由别的后端提供。
 
 ### 3.3 存储与迁移
@@ -492,7 +493,97 @@
 - 错误码：400 非法会话名；500 `{ "error": "关闭终端会话失败: …" }`
 - 副作用：`tmux kill-session`、写审计；幂等：是；限流：无
 
-## 十、错误码表
+## 十、SSH 公钥白名单
+
+公钥以 MySQL 表 `ssh_key` 为唯一事实源（与指标表同库）。sshd 通过 `AuthorizedKeysCommand` 调用独立命令
+`/usr/local/bin/ssh-keys-from-admin %u %f` 实时查询，因此**停用 / 删除在下一次登录时立即生效**；
+已建立的 SSH 连接不受影响。只有 `SSH_KEYS_USER`（默认 `root`）一个登录用户，最多保存 20 把公钥。
+
+字段口径：
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `id` | string | 自增主键的十进制字符串 |
+| `title` | string | 管理页标题，1–100 字符 |
+| `fingerprint` | string | GitHub 风格 `SHA256:` + 无填充 base64，与 `ssh-keygen -lf` 的指纹列一致 |
+| `keyType` | string | `ssh-ed25519` / `ssh-rsa` / `ecdsa-sha2-nistp*` / `sk-*@openssh.com` |
+| `comment` | string | 公钥行尾注释（可为空，≤200 字符） |
+| `enabled` | boolean | 停用后辅助命令不再输出该公钥 |
+| `createdAt` | number | epoch 毫秒 |
+| `lastUsedAt` | number \| null | 最近一次通过该公钥尝试登录的时间（epoch 毫秒）；从未使用为 `null` |
+
+校验（服务端强制，前端校验只是体验）：
+
+- 只接受 `type base64 [comment]` 单行纯公钥；`command=` / `environment=` / `permitopen=` 等前置选项一律 400。
+- base64 必须可解码，且解码后的 blob 算法名、字段长度须与声明类型自洽（不接受证书与未知算法）。
+- 同一指纹唯一（409）；整行 ≤8KB；标题 ≤100 字符；注释 ≤200 字符；最多 20 把（400）。
+
+### GET /api/admin/ssh-keys
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/ssh-keys"`
+- 成功 200：`{ "keys": [ { "id": "1", "title": "办公笔记本", "fingerprint": "SHA256:…", "keyType": "ssh-ed25519", "comment": "me@example.com", "enabled": true, "createdAt": 1760000000000, "lastUsedAt": null } ] }`（按 `id` 倒序，不含公钥原文）
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 401 | 未登录 / 会话失效 |
+  | 503 | `{ "error": "SSH 公钥库不可用" }`（指标库未连上） |
+  | 500 | `{ "error": "获取 SSH 公钥失败" }` |
+
+- 副作用：写审计（`ssh_keys_list`，只记数量）；幂等：是；限流：无
+
+### POST /api/admin/ssh-keys
+
+- 鉴权：`authRequired`
+- 请求参数（body）：
+
+  | 名称 | 类型 | 必填 | 默认 | 校验 |
+  |---|---|---|---|---|
+  | `title` | string | 是 | — | 去首尾空白后非空，≤100 字符 |
+  | `public_key` | string | 是 | — | `type base64 [comment]` 单行纯公钥；整行 ≤8KB；不接受前置选项 |
+
+- curl：`curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"title":"办公笔记本","public_key":"ssh-ed25519 AAAA… me@example.com"}' "$BASE_URL/api/admin/ssh-keys"`
+- 成功 201：单个公钥视图（字段同列表项）
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 400 | 标题空 / 超长；公钥格式非法、带前置选项、超长；已达 20 把上限 |
+  | 409 | 同一指纹已存在（`{ "error": "该公钥已存在" }`） |
+  | 401 / 503 / 500 | 同列表接口 |
+
+- 副作用：写 `ssh_key`、写审计（只记 id 与指纹，不记公钥内容）；幂等：否（重复提交返回 409）；限流：无
+
+### PATCH /api/admin/ssh-keys/:id
+
+- 鉴权：`authRequired`
+- 请求参数：path `id`（string，十进制正整数）；body 至少包含 `title` / `enabled` 之一：
+
+  | 名称 | 类型 | 必填 | 默认 | 校验 |
+  |---|---|---|---|---|
+  | `title` | string | 否 | 保持原值 | 去首尾空白后非空，≤100 字符 |
+  | `enabled` | boolean | 否 | 保持原值 | 必须是布尔值；`false` 即停用 |
+
+- curl：`curl -sS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"enabled":false}' "$BASE_URL/api/admin/ssh-keys/1"`
+- 成功 200：更新后的公钥视图
+- 错误码：400 ID 非法 / 无可更新字段 / 字段类型或长度非法；404 公钥不存在；401 / 503 / 500
+- 副作用：写 `ssh_key`、写审计（`ssh_keys_update`）；幂等：是（同入参结果一致）；限流：无
+
+### DELETE /api/admin/ssh-keys/:id
+
+- 鉴权：`authRequired`
+- 请求参数：path `id`（string，十进制正整数）
+- curl：`curl -sS -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/ssh-keys/1"`
+- 成功 200：`{ "ok": true }`
+- 错误码：400 ID 非法；404 公钥不存在；401 / 503 / 500
+- 副作用：删除 `ssh_key` 行（辅助命令下一次查询即不再返回该公钥）、写审计；幂等：**否**（重复删除 404）；限流：无
+
+> 部署侧：辅助命令的安装、只读数据库账号、`AuthorizedKeysCommand` 切换与回滚见
+> `deploy/ssh/README.md`。辅助程序把任何异常都转成「stdout 为空 + 退出码 0」。
+
+## 十一、错误码表
 
 | 状态码 | 通用语义 |
 |---|---|

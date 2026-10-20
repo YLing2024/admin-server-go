@@ -28,16 +28,24 @@ const (
 // 每张表在统一 DTO 里的字段映射：name 列、level 列。
 var sourceSpec = map[Source]struct {
 	table string
-	name  string
-	level string
-	// 额外可搜索列（除 message 外）
+	// nameExpr / levelExpr / messageExpr 直接进 SQL：各表结构不同，
+	// 尤其 http_access 没有 message 列，必须在这里拼出可读摘要。
+	nameExpr    string
+	levelExpr   string
+	messageExpr string
 	extraSearch []string
 }{
-	SourceSystem:    {table: "system_logs", name: "unit", level: "priority", extraSearch: []string{"ident"}},
-	SourceContainer: {table: "container_logs", name: "container", level: "stream", extraSearch: []string{"image"}},
-	SourceFile:      {table: "file_logs", name: "source_id", level: "level", extraSearch: []string{"path"}},
-	SourceAccess:    {table: "http_access", name: "remote_addr", level: "status", extraSearch: []string{"path", "method"}},
-	SourceError:     {table: "http_error", name: "source_id", level: "level"},
+	SourceSystem:    {table: "system_logs", nameExpr: "unit", levelExpr: "priority", messageExpr: "message", extraSearch: []string{"ident"}},
+	SourceContainer: {table: "container_logs", nameExpr: "container", levelExpr: "stream", messageExpr: "message", extraSearch: []string{"image"}},
+	SourceFile:      {table: "file_logs", nameExpr: "source_id", levelExpr: "level", messageExpr: "message", extraSearch: []string{"path"}},
+	SourceAccess: {
+		table:       "http_access",
+		nameExpr:    "remote_addr",
+		levelExpr:   "status",
+		messageExpr: "CONCAT(method, ' ', path, ' → ', status, ' ', bytes, 'B ', ROUND(req_time,3), 's')",
+		extraSearch: []string{"path", "method"},
+	},
+	SourceError: {table: "http_error", nameExpr: "'nginx'", levelExpr: "level", messageExpr: "message"},
 }
 
 // Entry 是统一后的日志行。
@@ -112,7 +120,7 @@ func (s *Service) Query(ctx context.Context, q Query) (Result, error) {
 	}
 	if kw := strings.TrimSpace(q.Q); kw != "" {
 		like := "%" + escapeLike(kw) + "%"
-		cols := append([]string{"message"}, spec.extraSearch...)
+		cols := append([]string{spec.messageExpr}, spec.extraSearch...)
 		ors := make([]string, 0, len(cols))
 		for _, c := range cols {
 			ors = append(ors, c+" LIKE ?")
@@ -123,8 +131,8 @@ func (s *Service) Query(ctx context.Context, q Query) (Result, error) {
 
 	// 多取一条用于判断是否还有下一页。
 	sqlText := fmt.Sprintf(
-		"SELECT ts, COALESCE(%s,''), COALESCE(%s,''), COALESCE(message,'') FROM %s WHERE %s ORDER BY ts DESC LIMIT %d OFFSET %d",
-		spec.name, spec.level, spec.table, strings.Join(where, " AND "), limit+1, offset,
+		"SELECT ts, COALESCE(%s,''), COALESCE(%s,''), COALESCE(%s,'') FROM %s WHERE %s ORDER BY ts DESC LIMIT %d OFFSET %d",
+		spec.nameExpr, spec.levelExpr, spec.messageExpr, spec.table, strings.Join(where, " AND "), limit+1, offset,
 	)
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -139,13 +147,17 @@ func (s *Service) Query(ctx context.Context, q Query) (Result, error) {
 	entries := make([]Entry, 0, limit)
 	for rows.Next() {
 		var (
-			ts      time.Time
+			rawTS   []byte
 			name    string
 			level   string
 			message string
 		)
-		if err := rows.Scan(&ts, &name, &level, &message); err != nil {
+		if err := rows.Scan(&rawTS, &name, &level, &message); err != nil {
 			return Result{}, err
+		}
+		ts, ok := parseDBTime(string(rawTS))
+		if !ok {
+			continue
 		}
 		if len(entries) == limit {
 			// 第 limit+1 条只用于标记 hasMore，不返回。
@@ -208,4 +220,21 @@ func normalizeLevel(source, raw string) string {
 func escapeLike(s string) string {
 	r := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_")
 	return r.Replace(s)
+}
+
+// parseDBTime 解析 MySQL DATETIME(3) 的文本形式。
+// 驱动未开 parseTime，这里统一按 UTC 解释（库内写入的就是 UTC 语义）。
+func parseDBTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	layouts := []string{
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+		time.RFC3339Nano,
+	}
+	for _, l := range layouts {
+		if t, err := time.ParseInLocation(l, raw, time.UTC); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }

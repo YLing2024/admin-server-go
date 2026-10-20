@@ -77,8 +77,8 @@ CREATE TABLE IF NOT EXISTS ssh_key (
 - `public_key` 存归一化后的 `type base64 comment` 单行（sshd 直接读取），指纹列存 hex；接口对外展示
   `SHA256:` + 无填充 base64（与 `ssh-keygen -lf` 一致）。
 - `created_at` 写入时取 `NOW()`；`last_used_at` 由辅助命令在收到 sshd `%f` 时尽力回写（失败不影响输出）。
-- 表由服务启动时的增量迁移创建；辅助命令**不建表、不写表**（只 `SELECT` 与一次可选的 `UPDATE last_used_at`），
-  因此只读账号若严格只给 `SELECT`，只是「最近使用」不更新，登录不受影响。
+- 表由服务启动时的增量迁移创建；辅助命令**只建连接、不建表**，查询走 `SELECT`，仅额外尝试一次
+  `UPDATE last_used_at`。只读账号若严格只给 `SELECT`，只是「最近使用」不更新，登录不受影响。
 - 管理端最多 20 行，上限在应用层校验；数据库不设 CHECK，避免与旧版本 MySQL 的兼容性分歧。
 
 ## 3. 迁移（只增量）

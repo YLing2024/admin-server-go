@@ -211,6 +211,7 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 		"uptime":       uptimeSeconds(),
 		"os":           osType() + " " + osRelease() + " (" + nodeArch() + ")",
 		"hostname":     hostname(),
+		"containers":   s.containerList(),
 	}, nil
 }
 

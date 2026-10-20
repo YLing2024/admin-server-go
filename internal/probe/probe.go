@@ -20,6 +20,9 @@ type Service struct {
 	cfg *config.Config
 	log *slog.Logger
 
+	// containers 缓存 docker 采集结果：`docker stats` 单次数百毫秒，不能挂在每帧上。
+	containers containerCache
+
 	// rateMu 保护「最近一次速率快照」与采样循环生命周期（见 rates.go）。快照是 REST 与 SSE
 	// 唯一的速率来源，由 StartSampler 起的唯一后台循环写入，读取方只读、不各自做差。
 	rateMu   sync.RWMutex

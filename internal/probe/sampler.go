@@ -191,8 +191,6 @@ func (s *Service) sampleHost() {
 
 	s.sampleMu.Lock()
 	defer s.sampleMu.Unlock()
-	s.sampleSnap.runQueue = cur.runQueue
-	s.sampleSnap.blocked = cur.blocked
 	s.sampleSnap.services = services
 
 	prev := s.samplePrev

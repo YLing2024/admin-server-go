@@ -52,6 +52,28 @@ func TestLoadTermUnlockField(t *testing.T) {
 	}
 }
 
+// TestLoadBitwardenFields 校验 Bitwarden 三项必填与会话文件默认值/覆盖。
+func TestLoadBitwardenFields(t *testing.T) {
+	cfg := loadWith(t, map[string]string{
+		"BITWARDEN_SERVER":    "https://vault.example.com/",
+		"BITWARDEN_EMAIL":     "user@example.com",
+		"BITWARDEN_DEVICE_ID": "device-1",
+	})
+	if cfg.BitwardenServer != "https://vault.example.com" {
+		t.Fatalf("BitwardenServer = %q（应去掉尾部斜杠）", cfg.BitwardenServer)
+	}
+	if cfg.BitwardenEmail != "user@example.com" || cfg.BitwardenDeviceID != "device-1" {
+		t.Fatalf("BitwardenEmail/DeviceID = %q/%q", cfg.BitwardenEmail, cfg.BitwardenDeviceID)
+	}
+	if !strings.HasSuffix(cfg.BitwardenSessionFile, ".bw_session") {
+		t.Fatalf("默认会话文件 = %q", cfg.BitwardenSessionFile)
+	}
+	custom := loadWith(t, map[string]string{"BITWARDEN_SESSION_FILE": "/tmp/example-bw-session"})
+	if custom.BitwardenSessionFile != "/tmp/example-bw-session" {
+		t.Fatalf("会话文件覆盖 = %q", custom.BitwardenSessionFile)
+	}
+}
+
 // TestLoadTermUnlockWarnsOnIllegal 校验非法值除回落外还告警一次（用于运维排错）。
 // 合法值与缺省不得产生该告警。
 func TestLoadTermUnlockWarnsOnIllegal(t *testing.T) {

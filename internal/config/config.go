@@ -86,6 +86,13 @@ type Config struct {
 	SSHKeysDBUser     string
 	SSHKeysDBPassword string
 	SSHKeysDBName     string
+
+	// Bitwarden* 是「工具」面板里 Bitwarden 解锁所需的身份服务参数。
+	// Server / Email / DeviceID 任一为空即视为未配置，该工具接口返回 501。
+	BitwardenServer      string
+	BitwardenEmail       string
+	BitwardenDeviceID    string
+	BitwardenSessionFile string
 }
 
 // ConfigError 表示无法用默认值兜底的配置错误（仅新增的数据库键会返回）。
@@ -171,6 +178,12 @@ func Load(get func(string) string) (*Config, error) {
 		cfg.SSHKeysDBPassword = raw
 	}
 	cfg.SSHKeysDBName = trimOr(get("SSH_KEYS_DB_NAME"), db.metricsName)
+
+	// 会话文件默认放 HOME 下，与服务器上 bw CLI 读取的位置一致；前三项必须显式配置。
+	cfg.BitwardenServer = strings.TrimRight(strings.TrimSpace(get("BITWARDEN_SERVER")), "/")
+	cfg.BitwardenEmail = strings.TrimSpace(get("BITWARDEN_EMAIL"))
+	cfg.BitwardenDeviceID = strings.TrimSpace(get("BITWARDEN_DEVICE_ID"))
+	cfg.BitwardenSessionFile = trimOr(get("BITWARDEN_SESSION_FILE"), filepath.Join(os.Getenv("HOME"), ".bw_session"))
 	return cfg, nil
 }
 

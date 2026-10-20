@@ -41,33 +41,42 @@ func unlockRequest(t *testing.T, password, ip string) *http.Request {
 	return httpx.WithBody(r, map[string]any{"password": password})
 }
 
-// TestUnlockWritesSessionAndStatus 覆盖成功路径：表单字段、0600 文件、状态剩余时间与清除。
+// fakeBW 在临时目录放一个假的 bw 可执行文件并把它放到 PATH 最前面。
+// 解锁逻辑改为委托官方 CLI（KDF 由 CLI 负责），因此测试用假 CLI 复现行为：
+// 读一行密码，匹配 $FAKE_BW_PASSWORD 就打印 $FAKE_BW_TOKEN，否则退出 1。
+func fakeBW(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+read -r pw
+if [ "$pw" = "$FAKE_BW_PASSWORD" ]; then
+  printf '? Master password: [input is hidden]\n'
+  printf '%s\n' "$FAKE_BW_TOKEN"
+  exit 0
+fi
+printf 'Cryptography error, The decryption operation failed\n'
+exit 1
+`
+	path := filepath.Join(dir, "bw")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("写假 bw: %v", err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	// 缩短 PTY 回显等待，避免每个用例都等 700ms。
+	old := cliEchoGrace
+	cliEchoGrace = 20 * time.Millisecond
+	t.Cleanup(func() { cliEchoGrace = old })
+}
+
+// TestUnlockWritesSessionAndStatus 覆盖成功路径：0600 文件、状态剩余时间、清单与清除。
 func TestUnlockWritesSessionAndStatus(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	token := testToken(now.Unix() + 3600)
-	var gotForm map[string]string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/identity/connect/token" {
-			t.Errorf("请求路径 = %q", r.URL.Path)
-		}
-		if err := r.ParseForm(); err != nil {
-			t.Errorf("ParseForm: %v", err)
-		}
-		gotForm = map[string]string{
-			"grant_type":       r.PostForm.Get("grant_type"),
-			"username":         r.PostForm.Get("username"),
-			"password":         r.PostForm.Get("password"),
-			"scope":            r.PostForm.Get("scope"),
-			"client_id":        r.PostForm.Get("client_id"),
-			"deviceType":       r.PostForm.Get("deviceType"),
-			"deviceIdentifier": r.PostForm.Get("deviceIdentifier"),
-			"deviceName":       r.PostForm.Get("deviceName"),
-		}
-		_, _ = w.Write([]byte(`{"access_token":"` + token + `"}`))
-	}))
-	defer srv.Close()
+	fakeBW(t)
+	t.Setenv("FAKE_BW_PASSWORD", "s3cret")
+	t.Setenv("FAKE_BW_TOKEN", token)
 
-	cfg := testConfig(t, srv.URL)
+	cfg := testConfig(t, "http://example.invalid")
 	svc := New(Options{Cfg: cfg, Now: func() time.Time { return now }})
 	rec := httptest.NewRecorder()
 	svc.Unlock(rec, unlockRequest(t, "s3cret", "198.51.100.7"))
@@ -76,21 +85,6 @@ func TestUnlockWritesSessionAndStatus(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "s3cret") || strings.Contains(rec.Body.String(), token) {
 		t.Fatalf("响应不得包含密码或 token: %s", rec.Body.String())
-	}
-	wantForm := map[string]string{
-		"grant_type":       "password",
-		"username":         "user@example.com",
-		"password":         "s3cret",
-		"scope":            "api offline_access",
-		"client_id":        "cli",
-		"deviceType":       "10",
-		"deviceIdentifier": "device-test",
-		"deviceName":       "admin-tools",
-	}
-	for k, want := range wantForm {
-		if gotForm[k] != want {
-			t.Errorf("表单 %s = %q, want %q", k, gotForm[k], want)
-		}
 	}
 
 	info, err := os.Stat(cfg.BitwardenSessionFile)
@@ -141,15 +135,13 @@ func TestUnlockWritesSessionAndStatus(t *testing.T) {
 	}
 }
 
-// TestUnlockFailureIsOpaque 校验上游失败统一回 401「密码错误」，且不落文件。
+// TestUnlockFailureIsOpaque 校验 CLI 失败统一回 401「密码错误」，且不落文件。
 func TestUnlockFailureIsOpaque(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"account not found user@example.com"}`))
-	}))
-	defer srv.Close()
+	fakeBW(t)
+	t.Setenv("FAKE_BW_PASSWORD", "correct-one")
+	t.Setenv("FAKE_BW_TOKEN", "irrelevant-token-value-that-is-long-enough-to-parse-1234567890")
 
-	cfg := testConfig(t, srv.URL)
+	cfg := testConfig(t, "http://example.invalid")
 	svc := New(Options{Cfg: cfg})
 	rec := httptest.NewRecorder()
 	svc.Unlock(rec, unlockRequest(t, "wrong-password-value", "198.51.100.8"))
@@ -166,8 +158,9 @@ func TestUnlockFailureIsOpaque(t *testing.T) {
 	if body.OK || body.Error != "密码错误" {
 		t.Fatalf("响应 = %s", rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), "wrong-password-value") || strings.Contains(rec.Body.String(), "account not found") {
-		t.Fatalf("响应不得泄漏密码或上游错误: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "wrong-password-value") ||
+		strings.Contains(rec.Body.String(), "Cryptography error") {
+		t.Fatalf("响应不得泄漏密码或 CLI 细节: %s", rec.Body.String())
 	}
 	if _, err := os.Stat(cfg.BitwardenSessionFile); !os.IsNotExist(err) {
 		t.Fatalf("失败不应写会话文件, err = %v", err)
@@ -177,12 +170,11 @@ func TestUnlockFailureIsOpaque(t *testing.T) {
 // TestUnlockRateLimit 校验同 IP 窗口内第 6 次返回 429（前 5 次失败不提前限流）。
 func TestUnlockRateLimit(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
+	fakeBW(t)
+	t.Setenv("FAKE_BW_PASSWORD", "correct-one")
+	t.Setenv("FAKE_BW_TOKEN", "irrelevant-token-value-that-is-long-enough-to-parse-1234567890")
 
-	svc := New(Options{Cfg: testConfig(t, srv.URL), Now: func() time.Time { return now }})
+	svc := New(Options{Cfg: testConfig(t, "http://example.invalid"), Now: func() time.Time { return now }})
 	for i := 1; i <= 5; i++ {
 		rec := httptest.NewRecorder()
 		svc.Unlock(rec, unlockRequest(t, "bad", "203.0.113.9"))
@@ -201,6 +193,29 @@ func TestUnlockRateLimit(t *testing.T) {
 	svc.Unlock(rec, unlockRequest(t, "bad", "203.0.113.10"))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("其它 IP status = %d, want 401", rec.Code)
+	}
+}
+
+// TestExtractSessionToken 校验从混有提示符与 ANSI 的 PTY 输出里取出裸令牌。
+func TestExtractSessionToken(t *testing.T) {
+	token := strings.Repeat("Ab3+/", 12) + "=="
+	out := "? Master password: [input is hidden]\r\n" +
+		"\x1b[?25l\x1b[2K" + token + "\x1b[?25h\r\n"
+	if got := extractSessionToken(out); got != token {
+		t.Fatalf("extractSessionToken = %q, want %q", got, token)
+	}
+	if got := extractSessionToken("Master password: [hidden]\nERROR: nope\n"); got != "" {
+		t.Fatalf("无令牌时应返回空, got %q", got)
+	}
+}
+
+// TestStripANSI 校验转义序列被清掉，且普通文本原样保留。
+func TestStripANSI(t *testing.T) {
+	if got := stripANSI("\x1b[2Kabc\x1b[0m"); got != "abc" {
+		t.Fatalf("stripANSI = %q", got)
+	}
+	if got := stripANSI("plain-text-123"); got != "plain-text-123" {
+		t.Fatalf("stripANSI 破坏了普通文本: %q", got)
 	}
 }
 

@@ -15,8 +15,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -186,12 +186,15 @@ func (s *Service) Unlock(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Lock 处理 POST /api/admin/tools/bitwarden/lock：删除会话文件即失效；文件本就不存在也算成功。
+// Lock 处理 POST /api/admin/tools/bitwarden/lock：删会话文件并让 CLI 真正上锁；
+// 只删文件不够 —— bw 自己不落锁的话，内存里仍能读条目，界面会误报「已锁定」。
 func (s *Service) Lock(w http.ResponseWriter, _ *http.Request) {
 	if !s.configured() {
 		httpx.Error(w, http.StatusNotImplemented, "未配置 BITWARDEN_*")
 		return
 	}
+	// CLI 上锁失败不影响本次响应：文件删除才是对外可见的锁定语义。
+	_ = exec.Command("bw", "lock").Run()
 	if err := os.Remove(s.cfg.BitwardenSessionFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "清除会话失败"})
 		return
@@ -204,47 +207,13 @@ func unlockFailed(w http.ResponseWriter) {
 	httpx.WriteJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "密码错误"})
 }
 
-// exchange 调 POST {SERVER}/identity/connect/token 换取 access_token。
-// 任何失败都折叠成 errAuthFailed，调用方不需要（也不应该）区分原因。
+// exchange 用主密码换出会话令牌。
+//
+// 走官方 bw CLI 而不是直接打 /identity/connect/token：该接口收的是客户端派生出的
+// master password hash，不是明文主密码（早期版本直接发明文，导致「密码正确却提示
+// 密码错误」）。KDF 参数由账号决定，交给 CLI 才不会随参数变化而失效。
 func (s *Service) exchange(ctx context.Context, password string) (string, error) {
-	form := url.Values{}
-	form.Set("grant_type", "password")
-	form.Set("username", s.cfg.BitwardenEmail)
-	form.Set("password", password)
-	form.Set("scope", "api offline_access")
-	form.Set("client_id", "cli")
-	form.Set("deviceType", "10")
-	form.Set("deviceIdentifier", s.cfg.BitwardenDeviceID)
-	form.Set("deviceName", "admin-tools")
-
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-	endpoint := strings.TrimRight(s.cfg.BitwardenServer, "/") + "/identity/connect/token"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", errAuthFailed
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return "", errAuthFailed
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
-		return "", errAuthFailed
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if err != nil {
-		return "", errAuthFailed
-	}
-	var payload struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil || strings.TrimSpace(payload.AccessToken) == "" {
-		return "", errAuthFailed
-	}
-	return payload.AccessToken, nil
+	return s.unlockViaCLI(ctx, password)
 }
 
 // allowAttempt 是进程内滑动窗口限速：记录每次解锁尝试（成功与否都算），

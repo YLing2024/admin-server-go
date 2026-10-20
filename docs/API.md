@@ -683,7 +683,99 @@
 > 部署侧：辅助命令的安装、只读数据库账号、`AuthorizedKeysCommand` 切换与回滚见
 > `deploy/ssh/README.md`。辅助程序把任何异常都转成「stdout 为空 + 退出码 0」。
 
-## 十一、错误码表
+## 十一、工具面板
+
+工具清单由 `GET /api/admin/tools` 数据驱动；当前只有 Bitwarden 解锁一项。接口只负责把主密码
+换成会话 token 落到服务器文件，**不记录请求体、不写审计、不在日志里输出密码或上游响应**。
+
+服务端环境变量（写入 `/etc/admin-server-go.env`）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `BITWARDEN_SERVER` | 空（必填） | 身份服务基址，如 `https://vault.example.com`；代码会拼 `/identity/connect/token` |
+| `BITWARDEN_EMAIL` | 空（必填） | Bitwarden 账号邮箱 |
+| `BITWARDEN_DEVICE_ID` | 空（必填） | 安装时生成一次并固定的设备标识 |
+| `BITWARDEN_SESSION_FILE` | `$HOME/.bw_session` | token 落盘路径；写入时权限固定 0600、原子替换 |
+
+前三项缺任一即「未配置」：清单里 `configured=false`，除清单外的三个接口返回 `501`，不影响其它工具。
+
+字段口径：
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `configured` | boolean | 三项必填环境变量是否齐全 |
+| `unlocked` | boolean | 会话文件存在、非空且 token 未过期（非 JWT 按已解锁处理） |
+| `expiresAt` | number \| null | token JWT 的 `exp`（epoch 毫秒）；非 JWT / 未解锁为 `null` |
+| `updatedAt` | number \| null | 会话文件最后修改时间（epoch 毫秒）；文件不存在为 `null` |
+| `expiresInSeconds` | number \| null | 距过期的剩余秒数；已过期为 `0`，非 JWT 为 `null` |
+
+### GET /api/admin/tools
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/tools"`
+- 成功 200：`[ { "id": "bitwarden", "name": "Bitwarden 解锁", "configured": true, "unlocked": false, "expiresAt": null } ]`
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 401 | 未登录 / 会话失效 |
+
+- 副作用：无（只读会话文件元信息）；幂等：是；限流：无
+
+### GET /api/admin/tools/bitwarden/status
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/tools/bitwarden/status"`
+- 成功 200：`{ "configured": true, "unlocked": true, "updatedAt": 1760000000000, "expiresInSeconds": 13320 }`
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 401 | 未登录 / 会话失效 |
+  | 501 | `{ "error": "未配置 BITWARDEN_*" }` |
+
+- 副作用：无；幂等：是；限流：无。**响应绝不含 token 或其片段。**
+
+### POST /api/admin/tools/bitwarden/unlock
+
+- 鉴权：`authRequired`
+- 请求参数（body）：
+
+  | 名称 | 类型 | 必填 | 默认 | 校验 |
+  |---|---|---|---|---|
+  | `password` | string | 是 | — | 非空；只用于本次请求内换 token，不落盘、不记日志 |
+
+- curl：`curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"password":"<主密码>"}' "$BASE_URL/api/admin/tools/bitwarden/unlock"`
+- 成功 200：`{ "ok": true, "expiresInSeconds": 3600 }`（非 JWT 时为 `null`）；同时原子写入 `BITWARDEN_SESSION_FILE`（0600）
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 401 | `{ "ok": false, "error": "密码错误" }`——账号不存在 / 密码错误 / 网络错误 / 上游 5xx **一律同一响应**，防枚举 |
+  | 429 | `{ "ok": false, "error": "尝试过多，请稍后再试", "retryAfter": 42 }`——同 IP 每分钟最多 5 次 |
+  | 501 | `{ "error": "未配置 BITWARDEN_*" }` |
+
+- 副作用：写 / 覆盖会话文件（临时文件 + rename，权限 0600）；**不写审计、不记录请求体**；幂等：是（重复解锁只会覆盖 token）；限流：同 IP 每分钟 5 次（进程内计数，成功与失败都计入）
+
+### POST /api/admin/tools/bitwarden/lock
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -X POST -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/tools/bitwarden/lock"`
+- 成功 200：`{ "ok": true }`（文件本就不存在也算成功）
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 401 | 未登录 / 会话失效 |
+  | 500 | `{ "ok": false, "error": "清除会话失败" }` |
+  | 501 | `{ "error": "未配置 BITWARDEN_*" }` |
+
+- 副作用：删除会话文件（删除即失效）；幂等：是；限流：无
+
+## 十二、错误码表
 
 | 状态码 | 通用语义 |
 |---|---|
@@ -695,5 +787,6 @@
 | 413 | 请求体超限 |
 | 429 | 触发限流（附 `retryAfter` 秒） |
 | 500 | 服务器内部错误（含请求体解析失败） |
+| 501 | 功能未配置（如 Bitwarden 环境变量缺失） |
 | 502 | 认证中心地址未配置 / 不可达 |
 | 503 | 依赖不可用（应用数据 / 历史库） |

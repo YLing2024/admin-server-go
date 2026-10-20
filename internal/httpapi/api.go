@@ -56,6 +56,14 @@ type SSHKeysService interface {
 	Delete(w http.ResponseWriter, r *http.Request)
 }
 
+// ToolsService 是「工具」面板域（internal/tools/bitwarden 实现）。
+type ToolsService interface {
+	List(w http.ResponseWriter, r *http.Request)
+	Status(w http.ResponseWriter, r *http.Request)
+	Unlock(w http.ResponseWriter, r *http.Request)
+	Lock(w http.ResponseWriter, r *http.Request)
+}
+
 // Options 是装配参数。
 type Options struct {
 	Cfg     *config.Config
@@ -66,6 +74,7 @@ type Options struct {
 	Apps    AppsService
 	SSHKeys SSHKeysService
 	System  SystemInfoService
+	Tools   ToolsService
 }
 
 // Server 是 HTTP 装配体。
@@ -79,6 +88,7 @@ type Server struct {
 	apps    AppsService
 	sshKeys SSHKeysService
 	system  SystemInfoService
+	tools   ToolsService
 	term    *term.Service
 	history *history.Service
 
@@ -100,6 +110,7 @@ func New(opts Options) *Server {
 		apps:        opts.Apps,
 		sshKeys:     opts.SSHKeys,
 		system:      opts.System,
+		tools:       opts.Tools,
 		term:        term.New(term.Options{Cfg: opts.Cfg, Redis: opts.Redis, Log: opts.Log}),
 		history:     history.New(history.Options{Cfg: opts.Cfg, Log: opts.Log}),
 		totpLimiter: auth.NewRateLimiter(5, []int{60, 300, 900}),

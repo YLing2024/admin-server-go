@@ -56,6 +56,10 @@ make run            # 构建并前台运行
 | `ADMIN_TOTP_SECRET_FILE` ← 新增 | `<root>/data/totp-secret.json` | 自带账号模式的 TOTP secret 文件 |
 | `REDIS_URL` ← 新增 | `redis://127.0.0.1:6379` | Redis 连接串 |
 | `HERMES_STATE_DB` | `~/.hermes/state.db` | Hermes 历史只读数据源（服务运行期唯一的只读 SQLite） |
+| `BITWARDEN_SERVER` ← 新增 | 空（必填） | 工具面板 Bitwarden 身份服务基址（不含 `/identity`）；与邮箱、设备 ID 缺任一即未配置 |
+| `BITWARDEN_EMAIL` ← 新增 | 空（必填） | Bitwarden 账号邮箱 |
+| `BITWARDEN_DEVICE_ID` ← 新增 | 空（必填） | 安装时生成一次并固定的设备标识 |
+| `BITWARDEN_SESSION_FILE` ← 新增 | `~/.bw_session` | 解锁后 token 落盘路径（0600、原子替换；不落密码、不向上游以外发送） |
 | `AUTH_CENTER_BASE_URL` | 空 | 认证中心基址（未配置时转发接口 502） |
 | `AUTH_CENTER_INTERNAL_TOKEN_FILE` | `<root>/../auth-server/internal-token` | 内部令牌文件（只读、不打印） |
 | `DB_HOST` | `127.0.0.1` | MySQL 地址 |

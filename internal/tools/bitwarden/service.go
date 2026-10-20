@@ -127,7 +127,7 @@ func (s *Service) List(w http.ResponseWriter, _ *http.Request) {
 		ID:         "bitwarden",
 		Name:       name,
 		Configured: s.configured(),
-		Unlocked:   state.unlocked,
+		Unlocked:   s.configured() && state.unlocked,
 		ExpiresAt:  state.expiresAt,
 	}})
 }

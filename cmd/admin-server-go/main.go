@@ -28,6 +28,7 @@ import (
 	"admin-server-go/internal/state"
 	"admin-server-go/internal/store"
 	"admin-server-go/internal/sysinfo"
+	bwtools "admin-server-go/internal/tools/bitwarden"
 )
 
 func main() {
@@ -98,6 +99,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
 	sshKeysSvc := sshkeys.New(sshkeys.Options{Cfg: cfg, DB: metricsDB, Log: logger})
 	systemSvc := sysinfo.New(logger)
+	toolsSvc := bwtools.New(bwtools.Options{Cfg: cfg})
 
 	handler := httpapi.New(httpapi.Options{
 		Cfg:     cfg,
@@ -108,6 +110,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		Apps:    appsSvc,
 		SSHKeys: sshKeysSvc,
 		System:  systemSvc,
+		Tools:   toolsSvc,
 	})
 
 	server := &http.Server{

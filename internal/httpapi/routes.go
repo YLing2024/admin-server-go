@@ -63,7 +63,13 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "PATCH /api/admin/ssh-keys/:id", auth: authRequired, handler: s.sshKeys.Update},
 		{pattern: "DELETE /api/admin/ssh-keys/:id", auth: authRequired, handler: s.sshKeys.Delete},
 
-		// ⑤ term
+		// ⑤ tools（工具面板；Bitwarden 解锁不记录请求体、token 只落盘）
+		{pattern: "GET /api/admin/tools", auth: authRequired, handler: s.tools.List},
+		{pattern: "GET /api/admin/tools/bitwarden/status", auth: authRequired, handler: s.tools.Status},
+		{pattern: "POST /api/admin/tools/bitwarden/unlock", auth: authRequired, handler: s.tools.Unlock},
+		{pattern: "POST /api/admin/tools/bitwarden/lock", auth: authRequired, handler: s.tools.Lock},
+
+		// ⑥ term
 		{pattern: "POST /api/admin/term/unlock", auth: authRequired, handler: s.term.Unlock},
 		{pattern: "GET /api/admin/term/mode", auth: authRequired, handler: s.term.Mode},
 		{pattern: "GET /api/admin/term/verify", handler: s.term.Verify},
@@ -71,10 +77,10 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "POST /api/admin/term/sessions/close", auth: authRequired, handler: s.term.CloseSessions},
 		{pattern: "DELETE /api/admin/term/sessions/:name", auth: authRequired, handler: s.term.KillSession},
 
-		// ⑥ public-apps（免鉴权；home 子域的「应用中心」依赖，不得删除）
+		// ⑦ public-apps（免鉴权；home 子域的「应用中心」依赖，不得删除）
 		{pattern: "GET /api/public/apps", handler: s.apps.PublicApps},
 
-		// ⑦ history（最后，且在 errorHandler 之后）
+		// ⑧ history（最后，且在 errorHandler 之后）
 		{pattern: "GET /api/admin/history", auth: authRequired, handler: s.history.List},
 		{pattern: "GET /api/admin/history/:id", auth: authRequired, handler: s.history.Detail},
 	}

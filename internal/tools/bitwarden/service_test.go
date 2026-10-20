@@ -268,7 +268,7 @@ func TestUnconfiguredReturns501(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &tools); err != nil {
 		t.Fatalf("解析工具清单: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Configured {
+	if len(tools) != 1 || tools[0].Configured || tools[0].Unlocked {
 		t.Fatalf("未配置时清单 = %+v", tools)
 	}
 }

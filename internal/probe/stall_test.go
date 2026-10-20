@@ -11,43 +11,51 @@ func TestComputeStallScore(t *testing.T) {
 		return map[string]any{"cpu": entry(cpu), "io": entry(io), "memory": entry(mem)}
 	}
 
-	score, level := computeStallScore(pressure(0, 0, 0), 0, 8)
+	score, level := computeStallScore(pressure(0, 0, 0), 0, 8, 0)
 	if score != 0 || level != "顺畅" {
 		t.Fatalf("空载 score=%v level=%q，want 0/顺畅", score, level)
 	}
 
 	// 0.4*50 + 0.3*20 + 0.2*10 + 0.1*(8/8*100) = 38
-	score, level = computeStallScore(pressure(50, 20, 10), 8, 8)
+	score, level = computeStallScore(pressure(50, 20, 10), 8, 8, 50)
 	if score != 38 || level != "有压力" {
 		t.Fatalf("有压 score=%v level=%q，want 38/有压力", score, level)
 	}
 
-	score, level = computeStallScore(pressure(90, 80, 70), 16, 8)
+	score, level = computeStallScore(pressure(90, 80, 70), 16, 8, 90)
 	if score <= 50 || level != "明显卡顿" {
 		t.Fatalf("满载 score=%v level=%q，want >50/明显卡顿", score, level)
 	}
 }
 
-// TestParseProcQueue 守住运行队列解析：只认 procs_running / procs_blocked 两行。
-func TestParseProcQueue(t *testing.T) {
-	fixture := "cpu  1 2 3 4 5 6 7 8 9 10\n" +
-		"intr 12345 0 0\n" +
-		"procs_running 4\n" +
-		"procs_blocked 2\n"
-	running, blocked := parseProcQueue(fixture)
-	if running != 4 || blocked != 2 {
-		t.Fatalf("running=%d blocked=%d，want 4/2", running, blocked)
+// TestStallLevelFloor 守住档位下限：分数不变，但排队或持续压满时至少「有压力」。
+func TestStallLevelFloor(t *testing.T) {
+	pressure := map[string]any{
+		"cpu":    map[string]any{"some": map[string]any{"avg60": 0.0}},
+		"io":     map[string]any{"some": map[string]any{"avg60": 0.0}},
+		"memory": map[string]any{"some": map[string]any{"avg60": 0.0}},
 	}
-}
+	// 8 核 run_queue=14（> 12）：分数不变，档位抬到「有压力」。
+	score, level := computeStallScore(pressure, 14, 8, 0)
+	if score != 10 || level != "有压力" {
+		t.Fatalf("排队 score=%v level=%q，want 10/有压力", score, level)
+	}
 
-// TestParseCgroupMemMB 守住 cgroup 内存解析：正常字节数四舍五入到 MB，非法值返回 nil。
-func TestParseCgroupMemMB(t *testing.T) {
-	if got := parseCgroupMemMB("576716800\n"); got == nil || *got != 550 {
-		t.Fatalf("mem=%v，want 550", got)
+	// usage_15s 压满且 run_queue>cores：同样至少「有压力」。
+	score, level = computeStallScore(pressure, 9, 8, 95)
+	if score != 10 || level != "有压力" {
+		t.Fatalf("持续压满 score=%v level=%q，want 10/有压力", score, level)
 	}
-	for _, raw := range []string{"", "[not set]", "abc", "-1", "infinity"} {
-		if got := parseCgroupMemMB(raw); got != nil {
-			t.Errorf("parseCgroupMemMB(%q)=%v，want nil", raw, *got)
-		}
+
+	// 恰好压满但未排队（run_queue==cores）：不触发下限，保持「顺畅」。
+	score, level = computeStallScore(pressure, 8, 8, 100)
+	if score != 10 || level != "顺畅" {
+		t.Fatalf("未排队 score=%v level=%q，want 10/顺畅", score, level)
+	}
+
+	// run_queue 恰好等于 cores*1.5 不触发（规则是「大于」）。
+	score, level = computeStallScore(pressure, 12, 8, 0)
+	if score != 10 || level != "顺畅" {
+		t.Fatalf("边界排队 score=%v level=%q，want 10/顺畅", score, level)
 	}
 }

@@ -135,6 +135,8 @@
 - `stall_score` / `stall_level`：由同一 tick 的 PSI（`some.avg60`）与运行队列合成的 0–100 卡顿指数：
   `0.40×min(psi_cpu,100) + 0.30×min(psi_io,100) + 0.20×min(psi_mem,100) + 0.10×min(run_queue÷cores×100,100)`。
   `<20` 为 `顺畅`、`20–50` 为 `有压力`、`>50` 为 `明显卡顿`；权重是后端常量，前端只展示文案。
+  分数只描述等待时长，档位另有两条下限：`run_queue > cores×1.5`，或 `usage_15s ≥ 95` 且 `run_queue > cores` 时，
+  档位至少抬到 `有压力`（`stall_score` 不变）。这样满载排队但 PSI 尚低时不会显示「顺畅」。
 - 以上新增字段全部由后台 1 秒采样器产出（含 `psi` 也取该 tick 的快照），请求路径不读取 `/proc` 或 cgroup。
 
 - 错误码：

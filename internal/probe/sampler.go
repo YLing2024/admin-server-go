@@ -227,7 +227,7 @@ func (s *Service) sampleHost() {
 	s.sampleSnap.movers = computeTopMovers(s.procHist, moverWindow, win.proc, 5)
 
 	cores := runtime.NumCPU()
-	s.sampleSnap.stallScore, s.sampleSnap.stallLevel = computeStallScore(psi, win.runQueue, cores)
+	s.sampleSnap.stallScore, s.sampleSnap.stallLevel = computeStallScore(psi, win.runQueue, cores, s.sampleSnap.usage15s)
 }
 
 // currentHostSnapshot 返回最近一次快照的副本。快照发布后不再被原地修改，

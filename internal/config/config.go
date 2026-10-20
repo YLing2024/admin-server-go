@@ -69,6 +69,10 @@ type Config struct {
 	// ProcMaxRows 对齐 ADMIN_PROC_MAX_ROWS：进程排行最多返回的行数。
 	ProcMaxRows int
 
+	// ProbeIntervalSec 是系统采样器的 tick 间隔（秒），对齐 PROBE_INTERVAL_SEC。
+	// CPU 是窗口型指标，间隔小于 1 秒时 Jiffies 量化会把占用率显著放大，故最小为 1。
+	ProbeIntervalSec int
+
 	// 数据库连接参数（仅 MySQL）。指标库 schema 由 DB_METRICS_NAME 指定（默认即云库名）。
 	DBHost        string
 	DBPort        int
@@ -131,6 +135,15 @@ func Load(get func(string) string) (*Config, error) {
 		}
 	}
 
+	probeIntervalSec := 1
+	if raw := strings.TrimSpace(get("PROBE_INTERVAL_SEC")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 {
+			probeIntervalSec = n
+		} else {
+			slog.Warn("PROBE_INTERVAL_SEC 取值非法，回落为 1", "value", raw)
+		}
+	}
+
 	tmp := os.TempDir()
 	cfg := &Config{
 		RepoRoot:                    repoRoot,
@@ -151,6 +164,7 @@ func Load(get func(string) string) (*Config, error) {
 		AuthCenterBaseURL:           strings.TrimRight(strings.TrimSpace(get("AUTH_CENTER_BASE_URL")), "/"),
 		AuthCenterInternalTokenFile: trimOr(get("AUTH_CENTER_INTERNAL_TOKEN_FILE"), filepath.Join(repoRoot, "..", "auth-server", "internal-token")),
 		ProcMaxRows:                 procMaxRows,
+		ProbeIntervalSec:            probeIntervalSec,
 	}
 
 	db, err := loadDB(get)

@@ -50,6 +50,7 @@ make run            # 构建并前台运行
 | `ADMIN_TERM_PW_FILE` | `~/.hermes/term_password` | 终端口令哈希（`sha256$<salt>$<hash>`，0600） |
 | `ADMIN_TERM_UNLOCK` ← 新增 | `password` | 终端口令门开关：`password`（默认，需口令换票据）/ `off`（不要求口令，登录后台即可进终端；非法值回落 `password` 并告警）。仅关闭第二道门，`authRequired` 与票据校验不变 |
 | `ADMIN_PROC_MAX_ROWS` | `2000` | 进程排行最多返回行数 |
+| `PROBE_INTERVAL_SEC` ← 新增 | `1` | 系统采样器 tick 间隔（秒，最小 1）；CPU 是窗口型指标，调小会放大 Jiffies 量化误差 |
 | `ADMIN_REDIS_PREFIX` | `admin-go:session:` | 会话 key 前缀（测试隔离用） |
 | `ADMIN_SAMPLER_LOCK` | 临时目录 `admin-server-go-sampler.lock` | 采样器互斥锁 |
 | `ADMIN_HISTORY_FILE` | 临时目录 `admin-server-go-history.json` | 历史留样文件 |

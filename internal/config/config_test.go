@@ -52,6 +52,25 @@ func TestLoadTermUnlockField(t *testing.T) {
 	}
 }
 
+// TestLoadProbeIntervalSec 校验采样间隔默认 1 秒、显式值生效、0/负数/非法值回落 1。
+func TestLoadProbeIntervalSec(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want int
+	}{
+		{"", 1},
+		{"3", 3},
+		{"0", 1},
+		{"-2", 1},
+		{"abc", 1},
+	}
+	for _, c := range cases {
+		if got := loadWith(t, map[string]string{"PROBE_INTERVAL_SEC": c.raw}).ProbeIntervalSec; got != c.want {
+			t.Errorf("PROBE_INTERVAL_SEC=%q → %d，want %d", c.raw, got, c.want)
+		}
+	}
+}
+
 // TestLoadBitwardenFields 校验 Bitwarden 三项必填与会话文件默认值/覆盖。
 func TestLoadBitwardenFields(t *testing.T) {
 	cfg := loadWith(t, map[string]string{

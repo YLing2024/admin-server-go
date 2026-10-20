@@ -34,12 +34,21 @@ func (s *Service) unlockViaCLI(ctx context.Context, password string) (string, er
 
 	cmd := exec.CommandContext(ctx, "script", "-qec", "stty -echo; bw unlock --raw", "/dev/null")
 	// 不继承外部 BW_SESSION，避免上一轮会话干扰本次解锁语义。
-	env := make([]string, 0, len(os.Environ())+1)
+	// 同时确保 HOME 存在：systemd 服务默认没有 HOME，bw 会去相对路径找配置，
+	// 结果永远是「You are not logged in」，而不是真正的解密失败。
+	env := make([]string, 0, len(os.Environ())+2)
+	hasHome := false
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "BW_SESSION=") {
 			continue
 		}
+		if strings.HasPrefix(kv, "HOME=") && len(kv) > len("HOME=") {
+			hasHome = true
+		}
 		env = append(env, kv)
+	}
+	if !hasHome {
+		env = append(env, "HOME=/root")
 	}
 	cmd.Env = env
 
@@ -69,6 +78,10 @@ func (s *Service) unlockViaCLI(ctx context.Context, password string) (string, er
 	text := out.String()
 	if password != "" && strings.Contains(text, password) {
 		text = strings.ReplaceAll(text, password, "")
+	}
+	// 环境问题优先于密码问题判定：CLI 没找到登录态时，任何密码都会失败。
+	if strings.Contains(text, "You are not logged in") {
+		return "", errCLINotLoggedIn
 	}
 	if waitErr != nil {
 		return "", errAuthFailed

@@ -43,6 +43,10 @@ const (
 // errAuthFailed 是统一的认证失败原因。调用方不得把它或上游响应细节回给客户端。
 var errAuthFailed = errors.New("bitwarden 认证失败")
 
+// errCLINotLoggedIn 表示 bw CLI 在本进程环境里找不到登录态（典型的 HOME 缺失）。
+// 必须与「密码错误」区分开：否则运维会被一个看似密码问题、实为环境问题的报错误导很久。
+var errCLINotLoggedIn = errors.New("bw CLI 未登录")
+
 // Options 是装配参数。Client 与 Now 留出测试注入点，生产使用默认值。
 type Options struct {
 	Cfg *config.Config
@@ -170,6 +174,14 @@ func (s *Service) Unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, err := s.exchange(r.Context(), password)
+	if errors.Is(err, errCLINotLoggedIn) {
+		// 环境问题，不是密码问题：给出可执行的提示，避免继续误判成密码错误。
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+			"ok":    false,
+			"error": "bw CLI 未登录：服务缺少 HOME 或登录态已丢失，需运维处理",
+		})
+		return
+	}
 	if err != nil || token == "" {
 		unlockFailed(w)
 		return

@@ -48,7 +48,7 @@
 | `total_threads` | 全部进程线程数之和（整数，截断前口径）；与 `count` 是**两个口径，不得混算** |
 | `total_cgroup_mb` | `system.slice` 的 cgroup 真值（MB，整数） |
 | `total_cpu` | 系统**总** CPU 占用（%），**不是**列表之和 |
-| `mem_percent` / `cpu.usage_percent` | 百分比（0–100） |
+| `mem_percent` / `cpu.usage_percent` / `cpu.load_percent` | 百分比（0–100） |
 
 > 三个内存数（`total_mem_mb` / `total_cgroup_mb` / `free` 口径）都「对」，但**口径不同**：RSS 含共享页重复计算、cgroup 含页缓存。界面上必须并列标注，不能混用。
 
@@ -91,7 +91,7 @@
 
 ```json
 {
-  "cpu": { "usage_percent": 12.3, "per_core": [{ "id": 0, "usage_percent": 8.1 }], "model": "…", "cores": 8, "loadavg": [0.5, 0.4, 0.3] },
+  "cpu": { "usage_percent": 12.3, "per_core": [{ "id": 0, "usage_percent": 8.1 }], "model": "…", "cores": 8, "loadavg": [0.5, 0.4, 0.3], "load_percent": 6.3 },
   "memory": { "percent": 47, "used": 7239, "available": 8000, "buffCache": 2100, "free": 1000, "total": 16000,
               "swapTotal": 0, "swapUsed": 0, "swapFree": 0, "swapPercent": 0, "zram": null },
   "disk": { "mount": "/", "used": 120, "total": 500, "free": 380, "percent": 24 },
@@ -107,6 +107,9 @@
   "uptime": 123456, "os": "Linux …", "hostname": "…"
 }
 ```
+
+- CPU 口径：`cpu.usage_percent` 与 `cpu.per_core` 同源于后台采样器的同一对 `/proc/stat` 快照（总量取 `cpu ` 聚合行、每核取 `cpuN` 行），不做 EMA；采样间隔默认 1 秒（`PROBE_INTERVAL_SEC`，最小 1），窗口不足 1 秒的样本直接丢弃。HTTP 请求只读快照，不会推进采样基线，因此连续调用与静置后调用结果一致。
+- `cpu.load_percent`：`load1 ÷ 逻辑核数 × 100`（一位小数）；`loadavg` 仍为 `/proc/loadavg` 原始 1/5/15 分钟负载。
 
 - 错误码：
 
@@ -317,6 +320,8 @@
   | `total_threads` | number | 全部进程线程数之和（截断前口径）；与 `count` 为两个口径，**不得相加/混算** |
 
   单行字段：`name` / `pid` / `ppid` / `mem_mb`（自身 RSS）/ `cpu` / `subtree_mem_mb` / `subtree_cpu` / `subtree_count` / `cgroup_mem_mb`（仅 systemd 单位主进程行有值，否则 `null`）/ `thread_count`（读 `/proc/<pid>/task` 条目数，取不到为 `null`）。
+
+- 进程 `cpu` 与顶层 `total_cpu` 同源于系统采样器的一个窗口：`Δ(utime+stime) ÷ Δtotal × 100`，不做 EMA；`total_cpu` 取自 `/proc/stat` 聚合行，等于同一窗口的 `cpu.usage_percent`。采样器尚未产出时 `cpu` 回退为 `ps` 的 `pcpu`；产出后新进程首帧不在快照里按 `0` 显示，下一 tick 起进入同一窗口。
 
 - 错误码：
 

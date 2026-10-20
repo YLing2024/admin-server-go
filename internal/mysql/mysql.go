@@ -93,6 +93,30 @@ func (d *Dialect) MigrateMetrics(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// MigrateSSHKeys 建 SSH 公钥白名单表（幂等）。
+//
+// 表与指标表同库（DB_METRICS_NAME），这样服务与只读辅助命令共用一套连接参数。
+// 只允许 CREATE TABLE IF NOT EXISTS，绝不 DROP / TRUNCATE / 重建。
+func (d *Dialect) MigrateSSHKeys(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS ssh_key ("+
+		"id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,"+
+		"title VARCHAR(100) NOT NULL,"+
+		"public_key TEXT NOT NULL,"+
+		"fingerprint CHAR(64) NOT NULL,"+
+		"key_type VARCHAR(32) NOT NULL,"+
+		"comment VARCHAR(200) NOT NULL DEFAULT '',"+
+		"enabled TINYINT(1) NOT NULL DEFAULT 1,"+
+		"created_at DATETIME NOT NULL,"+
+		"last_used_at DATETIME NULL,"+
+		"PRIMARY KEY (id),"+
+		"UNIQUE KEY uk_fingerprint (fingerprint)"+
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+	if err != nil {
+		return fmt.Errorf("创建 ssh_key 表失败: %w", err)
+	}
+	return nil
+}
+
 // ColumnExists 用 information_schema.columns 探测列（限定当前库）。
 func (d *Dialect) ColumnExists(ctx context.Context, q store.Querier, table, column string) (bool, error) {
 	var n int

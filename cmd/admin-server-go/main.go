@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,6 +24,7 @@ import (
 	"admin-server-go/internal/metrics"
 	"admin-server-go/internal/mysql"
 	"admin-server-go/internal/probe"
+	"admin-server-go/internal/sshkeys"
 	"admin-server-go/internal/state"
 	"admin-server-go/internal/store"
 )
@@ -93,6 +95,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
+	sshKeysSvc := sshkeys.New(sshkeys.Options{Cfg: cfg, DB: metricsDB, Log: logger})
 
 	handler := httpapi.New(httpapi.Options{
 		Cfg:     cfg,
@@ -101,6 +104,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		Log:     logger,
 		Metrics: metricsSvc,
 		Apps:    appsSvc,
+		SSHKeys: sshKeysSvc,
 	})
 
 	server := &http.Server{
@@ -128,10 +132,16 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 }
 
 // openDB 打开指标逻辑库并跑增量迁移。库名由 DB_METRICS_NAME 指定（默认即云库名）。
+// ssh_key 表与指标表同库，辅助命令也连这个库。
 func openDB(ctx context.Context, cfg *config.Config) (*store.DB, error) {
 	dialect := mysql.New()
 	dsn := mysql.BuildDSN(cfg.DBHost, cfg.DBPort, cfg.DBMetricsName, cfg.DBUser, cfg.DBPassword)
-	return store.Open(ctx, dialect, dsn, 16, dialect.MigrateMetrics)
+	return store.Open(ctx, dialect, dsn, 16, func(ctx context.Context, db *sql.DB) error {
+		if err := dialect.MigrateMetrics(ctx, db); err != nil {
+			return err
+		}
+		return dialect.MigrateSSHKeys(ctx, db)
+	})
 }
 
 // waitForShutdown 优雅退出：停采样器 → 关 HTTP。

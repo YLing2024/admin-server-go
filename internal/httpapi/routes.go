@@ -55,7 +55,13 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "PATCH /api/admin/api-tokens/:id", auth: authRequired, handler: s.handleAPITokensUpdate},
 		{pattern: "DELETE /api/admin/api-tokens/:id", auth: authRequired, handler: s.handleAPITokensDelete},
 
-		// ④ term
+		// ④ ssh-keys（公钥白名单；与指标表同库）
+		{pattern: "GET /api/admin/ssh-keys", auth: authRequired, handler: s.sshKeys.List},
+		{pattern: "POST /api/admin/ssh-keys", auth: authRequired, handler: s.sshKeys.Create},
+		{pattern: "PATCH /api/admin/ssh-keys/:id", auth: authRequired, handler: s.sshKeys.Update},
+		{pattern: "DELETE /api/admin/ssh-keys/:id", auth: authRequired, handler: s.sshKeys.Delete},
+
+		// ⑤ term
 		{pattern: "POST /api/admin/term/unlock", auth: authRequired, handler: s.term.Unlock},
 		{pattern: "GET /api/admin/term/mode", auth: authRequired, handler: s.term.Mode},
 		{pattern: "GET /api/admin/term/verify", handler: s.term.Verify},
@@ -63,10 +69,10 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "POST /api/admin/term/sessions/close", auth: authRequired, handler: s.term.CloseSessions},
 		{pattern: "DELETE /api/admin/term/sessions/:name", auth: authRequired, handler: s.term.KillSession},
 
-		// ⑤ public-apps（免鉴权；home 子域的「应用中心」依赖，不得删除）
+		// ⑥ public-apps（免鉴权；home 子域的「应用中心」依赖，不得删除）
 		{pattern: "GET /api/public/apps", handler: s.apps.PublicApps},
 
-		// ⑥ history（最后，且在 errorHandler 之后）
+		// ⑦ history（最后，且在 errorHandler 之后）
 		{pattern: "GET /api/admin/history", auth: authRequired, handler: s.history.List},
 		{pattern: "GET /api/admin/history/:id", auth: authRequired, handler: s.history.Detail},
 	}

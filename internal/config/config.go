@@ -75,6 +75,17 @@ type Config struct {
 	DBUser        string
 	DBPassword    string
 	DBMetricsName string
+
+	// SSHKeysUser 是允许登录的唯一用户名（辅助命令 ssh-keys-from-admin 使用，默认 root）。
+	SSHKeysUser string
+	// SSHKeysEnvFile 是辅助程序在 sshd 下运行时读取凭证的环境文件（sshd 不会继承服务进程环境）。
+	SSHKeysEnvFile string
+	// SSHKeysDB* 是辅助程序的只读数据库连接参数；未单独配置时回退到 DB_*。
+	SSHKeysDBHost     string
+	SSHKeysDBPort     int
+	SSHKeysDBUser     string
+	SSHKeysDBPassword string
+	SSHKeysDBName     string
 }
 
 // ConfigError 表示无法用默认值兜底的配置错误（仅新增的数据库键会返回）。
@@ -144,6 +155,22 @@ func Load(get func(string) string) (*Config, error) {
 	cfg.DBUser = db.user
 	cfg.DBPassword = db.password
 	cfg.DBMetricsName = db.metricsName
+
+	cfg.SSHKeysUser = trimOr(get("SSH_KEYS_USER"), "root")
+	cfg.SSHKeysEnvFile = trimOr(get("SSH_KEYS_ENV_FILE"), DefaultSSHKeysEnvFile)
+	cfg.SSHKeysDBHost = trimOr(get("SSH_KEYS_DB_HOST"), db.host)
+	cfg.SSHKeysDBPort = db.port
+	if raw := strings.TrimSpace(get("SSH_KEYS_DB_PORT")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 65535 {
+			cfg.SSHKeysDBPort = n
+		}
+	}
+	cfg.SSHKeysDBUser = trimOr(get("SSH_KEYS_DB_USER"), db.user)
+	cfg.SSHKeysDBPassword = db.password
+	if raw := get("SSH_KEYS_DB_PASSWORD"); raw != "" {
+		cfg.SSHKeysDBPassword = raw
+	}
+	cfg.SSHKeysDBName = trimOr(get("SSH_KEYS_DB_NAME"), db.metricsName)
 	return cfg, nil
 }
 
@@ -200,6 +227,10 @@ func parseTermUnlock(raw string) TermUnlockMode {
 		return TermUnlockPassword
 	}
 }
+
+// DefaultSSHKeysEnvFile 是辅助命令在 sshd 下读取的凭证文件默认路径。
+// sshd 启动 AuthorizedKeysCommand 时不会继承 systemd 服务的环境变量，必须落到文件。
+const DefaultSSHKeysEnvFile = "/etc/ssh-keys-from-admin.env"
 
 // 数据库默认值：库名默认即云库名（唯一权威见 go-rewrite/docs/mysql-schema-cloud.md）。
 const (

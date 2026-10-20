@@ -42,6 +42,14 @@ type AppsService interface {
 	PublicApps(w http.ResponseWriter, r *http.Request)
 }
 
+// SSHKeysService 是 SSH 公钥白名单管理域（internal/sshkeys 实现）。
+type SSHKeysService interface {
+	List(w http.ResponseWriter, r *http.Request)
+	Create(w http.ResponseWriter, r *http.Request)
+	Update(w http.ResponseWriter, r *http.Request)
+	Delete(w http.ResponseWriter, r *http.Request)
+}
+
 // Options 是装配参数。
 type Options struct {
 	Cfg     *config.Config
@@ -50,6 +58,7 @@ type Options struct {
 	Log     *slog.Logger
 	Metrics MetricsService
 	Apps    AppsService
+	SSHKeys SSHKeysService
 }
 
 // Server 是 HTTP 装配体。
@@ -61,6 +70,7 @@ type Server struct {
 	auth    *auth.Authenticator
 	metrics MetricsService
 	apps    AppsService
+	sshKeys SSHKeysService
 	term    *term.Service
 	history *history.Service
 
@@ -80,6 +90,7 @@ func New(opts Options) *Server {
 		log:         opts.Log,
 		metrics:     opts.Metrics,
 		apps:        opts.Apps,
+		sshKeys:     opts.SSHKeys,
 		term:        term.New(term.Options{Cfg: opts.Cfg, Redis: opts.Redis, Log: opts.Log}),
 		history:     history.New(history.Options{Cfg: opts.Cfg, Log: opts.Log}),
 		totpLimiter: auth.NewRateLimiter(5, []int{60, 300, 900}),

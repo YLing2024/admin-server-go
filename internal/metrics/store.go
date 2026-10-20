@@ -31,6 +31,7 @@ type HistoryPoint struct {
 	TS          int64    `json:"ts"`
 	CPU         float64  `json:"cpu"`
 	MemPercent  float64  `json:"mem_percent"`
+	DiskPercent float64  `json:"disk_percent"`
 	SwapPercent float64  `json:"swap_percent"`
 	PsiMemAvg10 *float64 `json:"psi_mem_avg10"`
 	PsiCPUAvg10 *float64 `json:"psi_cpu_avg10"`
@@ -218,6 +219,7 @@ func (s *Service) sampleHistory() {
 		TS:          now,
 		CPU:         cpuPercent,
 		MemPercent:  probe.MemPercent(),
+		DiskPercent: probe.RootDiskPercent(),
 		SwapPercent: probe.SwapPercent(),
 		PsiMemAvg10: psi.MemAvg10,
 		PsiCPUAvg10: psi.CPUAvg10,
@@ -311,6 +313,7 @@ func metricPointValues(point HistoryPoint, memUsed, memTotal float64) map[string
 		"mem_percent":   point.MemPercent,
 		"mem_used":      memUsed,
 		"mem_total":     memTotal,
+		"disk_percent":  point.DiskPercent,
 		"swap_percent":  point.SwapPercent,
 		"psi_mem_avg10": point.PsiMemAvg10,
 		"psi_cpu_avg10": point.PsiCPUAvg10,

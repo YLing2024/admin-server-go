@@ -1,8 +1,10 @@
 package probe
 
 import (
+	"math"
 	"os/exec"
 	"strings"
+	"syscall"
 )
 
 // getDisks 解析 `df -kP`，返回所有真实挂载的设备盘（filesystem 以 /dev/ 开头），
@@ -78,6 +80,18 @@ func stripPartition(name string) string {
 		}
 	}
 	return ""
+}
+
+// RootDiskPercent 返回根分区使用率（0–100，一位小数）；Statfs 失败返回 0。
+// 历史趋势的「磁盘」列用它，与 /api/admin/system/info 的 disks[].percent 同口径（used/blocks）。
+func RootDiskPercent() float64 {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs("/", &st); err != nil || st.Blocks == 0 {
+		return 0
+	}
+	used := float64(st.Blocks - st.Bfree)
+	percent := used / float64(st.Blocks) * 100
+	return math.Round(percent*10) / 10
 }
 
 // getDisk 是旧字段兼容：只取挂载点为 "/" 的盘，找不到时保持全 0。

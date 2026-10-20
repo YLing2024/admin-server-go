@@ -50,7 +50,7 @@ type Swap struct {
 	Used  int64 `json:"used"`
 }
 
-// Disk 是真实块设备的一个挂载点。百分比保留一位小数。
+// Disk 是真实块设备的一个挂载点。百分比保留一位小数；inode 为同一挂载点的文件数口径。
 type Disk struct {
 	Mount        string  `json:"mount"`
 	Filesystem   string  `json:"filesystem"`
@@ -59,15 +59,20 @@ type Disk struct {
 	Used         int64   `json:"used"`
 	Free         int64   `json:"free"`
 	Percent      float64 `json:"percent"`
-	InodePercent float64 `json:"inodePercent"`
+	InodeTotal   int64   `json:"inode_total"`
+	InodeUsed    int64   `json:"inode_used"`
+	InodePercent float64 `json:"inode_percent"`
 }
 
-// PortItem 是一条监听项（按端口排序，最多 15 条）。
+// PortItem 是一条监听项。Protocol / State 让前端的 TCP/UDP/仅监听过滤有真实依据；
+// 端口按数值升序，同端口再按协议、进程名排序。
 type PortItem struct {
-	Port    int    `json:"port"`
-	Process string `json:"process"`
-	PID     *int   `json:"pid,omitempty"`
-	Address string `json:"address"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	State    string `json:"state"`
+	Process  string `json:"process"`
+	PID      *int   `json:"pid,omitempty"`
+	Address  string `json:"address"`
 }
 
 // Ports 是监听端口概况。Error 仅在 `ss` 执行失败时出现。
@@ -312,6 +317,11 @@ func diskFromStatfs(mount, device, fstype string, st *syscall.Statfs_t) Disk {
 		percent = round1(used / total * 100)
 	}
 	inodePercent := 0.0
+	inodeTotal := int64(st.Files)
+	inodeUsed := int64(st.Files - st.Ffree)
+	if inodeUsed < 0 {
+		inodeUsed = 0
+	}
 	if st.Files > 0 {
 		inodePercent = round1(float64(st.Files-st.Ffree) / float64(st.Files) * 100)
 	}
@@ -323,6 +333,8 @@ func diskFromStatfs(mount, device, fstype string, st *syscall.Statfs_t) Disk {
 		Used:         int64(math.Round(used)),
 		Free:         int64(math.Round(free)),
 		Percent:      percent,
+		InodeTotal:   inodeTotal,
+		InodeUsed:    inodeUsed,
 		InodePercent: inodePercent,
 	}
 }

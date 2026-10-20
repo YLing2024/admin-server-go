@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ssProcRe 从 `ss -tlnp` 的 `users:(("name",pid=123,fd=4))` 里取进程名与 pid。
@@ -20,34 +21,50 @@ var weekday = map[string]bool{
 	"Fri": true, "Sat": true, "Sun": true,
 }
 
-// readPorts 执行 `ss -tlnp` 并解析监听端口；失败返回空数组 + error。
+// readPorts 执行 `ss -tulnp` 并解析全部监听端口（TCP + UDP）；失败返回空数组 + error。
+// 不再截断：概况接口按 `?ports=all|15` 在响应层决定是否只给 15 条，缓存里始终是全量。
 func readPorts(parent context.Context) Ports {
-	out, err := runCommand(parent, "ss", "-tlnp")
+	out, err := runCommand(parent, "ss", "-tulnp")
 	if err != nil {
 		return Ports{Items: []PortItem{}, Error: err.Error()}
 	}
 	items := parseSSOutput(out)
-	total := len(items)
-	if len(items) > 15 {
-		items = items[:15]
-	}
-	return Ports{Total: total, Items: items}
+	return Ports{Total: len(items), Items: items}
 }
 
-// parseSSOutput 解析 `ss -tlnp`：只收 LISTEN 行，按端口升序（同端口按进程名）。
+// parseSSOutput 解析 `ss` 的 socket 列表：兼容 `ss -tulnp`（带 Netid 列）与旧 `ss -tlnp`
+// （无 Netid 列，所有行都是 TCP LISTEN）。只收 LISTEN / UNCONN 行，按端口升序（同端口按协议、进程名）。
 // 地址取本地地址列（`0.0.0.0:22` / `[::]:443` / `*:80`）。
 func parseSSOutput(text string) []PortItem {
 	items := []PortItem{}
 	for _, line := range strings.Split(text, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 5 || fields[0] != "LISTEN" {
+		if len(fields) == 0 {
 			continue
 		}
-		address, port := splitLocalAddress(fields[3])
+		protocol, state, local := "", "", ""
+		switch {
+		case fields[0] == "tcp" || fields[0] == "udp":
+			if len(fields) < 5 {
+				continue
+			}
+			protocol, state, local = fields[0], fields[1], fields[4]
+		case fields[0] == "LISTEN" || fields[0] == "UNCONN":
+			if len(fields) < 4 {
+				continue
+			}
+			protocol, state, local = "tcp", fields[0], fields[3]
+		default:
+			continue
+		}
+		if state != "LISTEN" && state != "UNCONN" {
+			continue
+		}
+		address, port := splitLocalAddress(local)
 		if port <= 0 {
 			continue
 		}
-		item := PortItem{Port: port, Address: address}
+		item := PortItem{Port: port, Protocol: protocol, State: state, Address: address}
 		if m := ssProcRe.FindStringSubmatch(line); m != nil {
 			item.Process = m[1]
 			if pid, err := strconv.Atoi(m[2]); err == nil {
@@ -59,6 +76,9 @@ func parseSSOutput(text string) []PortItem {
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Port != items[j].Port {
 			return items[i].Port < items[j].Port
+		}
+		if items[i].Protocol != items[j].Protocol {
+			return items[i].Protocol < items[j].Protocol
 		}
 		return items[i].Process < items[j].Process
 	})
@@ -147,7 +167,12 @@ func parseLastOutput(text string) []LoginItem {
 
 // runCommand 在 1.5s 超时内执行只读命令；错误文本带上 stderr，便于接口字段直接展示。
 func runCommand(parent context.Context, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(parent, commandTimeout)
+	return runCommandWithin(parent, commandTimeout, name, args...)
+}
+
+// runCommandWithin 与 runCommand 相同，但允许调用方指定更短超时（服务清单要求 300ms 内完成）。
+func runCommandWithin(parent context.Context, timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stderr bytes.Buffer
@@ -161,7 +186,7 @@ func runCommand(parent context.Context, name string, args ...string) (string, er
 		detail = err.Error()
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		detail = "执行超时（" + commandTimeout.String() + "）"
+		detail = "执行超时（" + timeout.String() + "）"
 	}
 	return string(out), fmt.Errorf("%s: %s", name, truncate(detail, 200))
 }

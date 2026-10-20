@@ -53,6 +53,12 @@
 | `cpu.top_movers[].delta_percent` | 最近 15 秒窗口内该进程消耗的 CPU 占整机可用时间百分比 |
 | `top_services[].cpu_percent` | 该 systemd 单元最近一个 tick 的 CPU 占整机可用时间百分比 |
 | `top_services[].mem_mb` | 该 systemd 单元 cgroup 内存真值（MB，整数）；读不到为 `null` |
+| `system/services[].cpu_percent` | 该运行中单元的 cgroup `cpu.stat` 两次采样差值占整机可用 CPU 时间百分比；单核满载约 `100 ÷ 核数` |
+| `system/services[].mem_mb` | 该单元 cgroup `memory.current` 换算的 MB 整数；读不到为 `null` |
+| `system/services[].since` | 本次启动时间，**epoch 秒**（取自 systemd invocation 文件 mtime）；读不到为 `0` |
+| `ports[].protocol` / `ports[].state` | `tcp` / `udp`；`LISTEN`（TCP）/ `UNCONN`（UDP） |
+| `disks[].inode_*` | inode 文件数口径：`inode_total` / `inode_used`（个）、`inode_percent`（%，一位小数） |
+| `disk_percent` | 历史趋势里的根分区使用率（%，一位小数），与 `system/info` 的 `disks[]` 同口径 |
 | `stall_score` | 0–100 卡顿指数（一位小数）；`stall_level` 为对应中文档位 |
 | `mem_percent` / `cpu.usage_percent` / `cpu.load_percent` | 百分比（0–100） |
 
@@ -165,7 +171,12 @@
 ### GET /api/admin/system/info
 
 - 鉴权：`authRequired`
-- 请求参数：无
+- 请求参数：
+
+  | 名称 | 位置 | 类型 | 必填 | 默认 | 取值/校验 |
+  |---|---|---|---|---|---|
+  | `ports` | query | string | 否 | `all` | `all` 返回全部监听项；`15` 只返回前 15 条（`total` 仍为全量） |
+
 - curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/system/info"`
 - 成功 200（数组字段缺失时为空数组；`temperatures` 无热区时省略）：
 
@@ -185,11 +196,11 @@
   "disks": [
     { "mount": "/", "filesystem": "/dev/vda1", "fstype": "ext4",
       "total": 500000000000, "used": 230000000000, "free": 250000000000,
-      "percent": 46, "inodePercent": 12.3 }
+      "percent": 46, "inode_total": 3268608, "inode_used": 605694, "inode_percent": 18.5 }
   ],
   "ports": {
     "total": 18,
-    "items": [{ "port": 22, "process": "sshd", "pid": 812, "address": "0.0.0.0" }],
+    "items": [{ "port": 22, "protocol": "tcp", "state": "LISTEN", "process": "sshd", "pid": 812, "address": "0.0.0.0" }],
     "error": ""
   },
   "systemd": { "failed": [{ "name": "foo.service", "description": "…" }], "error": "" },
@@ -211,8 +222,8 @@
   | `cpuModel` / `cpuCores` | string / number | `/proc/cpuinfo` 型号；`runtime.NumCPU()` 逻辑核数 |
   | `memory` | object | 字节：`total`、`available`（`MemAvailable`）、`used`（`total − available`）、`cached`（`Buffers + Cached`） |
   | `swap` | object | 字节：`total` / `used`（`SwapTotal − SwapFree`） |
-  | `disks` | array | `/proc/self/mounts` 中 device 以 `/dev/` 开头的真实块设备挂载点，`syscall.Statfs` 读容量；跳过 `tmpfs` / `overlay` / `devtmpfs` / `squashfs` / `iso9660` / loop 设备与重复挂载点。`percent`、`inodePercent` 保留一位小数 |
-  | `ports` | object | `ss -tlnp`：`total` 为全部监听项数，`items` 按端口升序最多 15 条（`port` / `process` / `pid` / `address`） |
+  | `disks` | array | `/proc/self/mounts` 中 device 以 `/dev/` 开头的真实块设备挂载点（**全部**挂载点，不截断），`syscall.Statfs` 读容量与 inode；跳过 `tmpfs` / `overlay` / `devtmpfs` / `squashfs` / `iso9660` / loop 设备与重复挂载点。`percent`、`inode_percent` 保留一位小数 |
+  | `ports` | object | `ss -tulnp`：`total` 为全部 TCP/UDP 监听项数；`items` 默认返回全部（`?ports=15` 时只给前 15 条）。每项含 `port` / `protocol` / `state` / `process` / `pid` / `address` |
   | `systemd` | object | `systemctl --failed --no-legend --plain`：`failed[]` 含 `name` / `description` |
   | `logins` | object | `last -n 5 -w`：`items[]` 含 `user` / `ip` / `time`（`time` 为 `last` 原始文本，避免 locale 解析；`reboot`/`shutdown`/`wtmp` 伪记录被过滤） |
   | `temperatures` | array（可选） | `/sys/class/thermal/thermal_zone*/temp` 存在时才返回；`celsius` 保留一位小数 |
@@ -262,12 +273,46 @@
 
 - 副作用：两次 `/proc` 只读遍历（间隔 500ms）；不调用 `ps`、不读写文件系统。幂等：是（值随采样时刻变化）。限流：无。
 
+### GET /api/admin/system/services
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/system/services"`
+- 成功 200：全部 running 的 `.service` 单元数组（按 CPU 降序，CPU 相同按单元名）；没有单元时为 `[]`：
+
+```json
+[
+  { "unit": "admin-server-go.service", "active": "active", "cpu_percent": 7.4, "mem_mb": 35, "since": 1792502132 }
+]
+```
+
+- 字段：
+
+  | 字段 | 类型 | 语义 |
+  |---|---|---|
+  | `unit` | string | systemd 单元名（含 `.service`） |
+  | `active` | string | `systemctl list-units` 的 `active` 列；running 状态下通常为 `active` |
+  | `cpu_percent` | number | cgroup `cpu.stat` 的 `usage_usec` 两次采样差值，按整机可用 CPU 时间归一（单核满载约 `100 ÷ 核数`），一位小数 |
+  | `mem_mb` | number \| null | cgroup `memory.current` 换算的 MB 整数；读不到为 `null` |
+  | `since` | number | 本次启动时间，**epoch 秒**（取自 `/run/systemd/units/invocation:<unit>` 的 mtime）；读不到为 `0` |
+
+- 采集：`systemctl list-units --type=service --state=running --output=json` + 每个单元 cgroup 的
+  `cpu.stat` / `memory.current`；两次 cgroup 采样间隔 80ms，整次请求硬超时 **300ms**。
+- 降级：命令失败 / 超时统一返回 `[]`（状态码仍为 200）并写 warn 日志；单个单元 cgroup 读不到只影响该行。
+- 错误码：
+
+  | 状态码 | 语义 |
+  |---|---|
+  | 401 | 未登录 / 会话失效 |
+
+- 副作用：一次只读 `systemctl` 与两次 cgroup 文件读取；不写库。幂等：是（值随采样时刻变化）。限流：无。
+
 ### GET /api/admin/system/history
 
 - 鉴权：`authRequired`
 - 请求参数：无
 - curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/system/history"`
-- 成功 200：环形 buffer 中的采样点数组（最多约 120 点）`[{ "ts": <epoch ms>, "cpu": …, "mem_percent": …, …, "disk_io_read": …, "disk_io_write": …, "disk_io_vda_read": …, "disk_io_vda_write": … }]`；无数据为 `[]`。
+- 成功 200：环形 buffer 中的采样点数组（最多约 120 点）`[{ "ts": <epoch ms>, "cpu": …, "mem_percent": …, "disk_percent": …, …, "disk_io_read": …, "disk_io_write": …, "disk_io_vda_read": …, "disk_io_vda_write": … }]`；无数据为 `[]`。
   除固定列外，还带每块整盘的速率键 `disk_io_<device>_read` / `disk_io_<device>_write`（`device` 同 `disks[].device`）；
   老采样点缺这些键时视为缺失，前端自行回退。
 - 错误：401

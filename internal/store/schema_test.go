@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestSetDiskDevicesAppendsSortedColumns 守住 MetricKeys 的动态扩展：固定 12 列在前，
+// TestSetDiskDevicesAppendsSortedColumns 守住 MetricKeys 的动态扩展：固定列在前，
 // 按盘速率列按设备名字典序稳定追加；MetricRound 新列为 0；DiskDevices 去重且有序。
 func TestSetDiskDevicesAppendsSortedColumns(t *testing.T) {
 	defer SetDiskDevices(nil)

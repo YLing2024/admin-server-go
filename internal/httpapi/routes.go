@@ -34,6 +34,7 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "GET /api/admin/system", auth: authRequired, handler: s.metrics.System},
 		{pattern: "GET /api/admin/system/info", auth: authRequired, handler: s.system.Info},
 		{pattern: "GET /api/admin/system/processes", auth: authRequired, handler: s.system.Processes},
+		{pattern: "GET /api/admin/system/services", auth: authRequired, handler: s.system.Services},
 		{pattern: "GET /api/admin/system/history", auth: authRequired, handler: s.metrics.History},
 		{pattern: "GET /api/admin/system/metrics", auth: authRequired, handler: s.metrics.Metrics},
 		{pattern: "GET /api/admin/system/stream", auth: authRequired, handler: s.metrics.Stream},

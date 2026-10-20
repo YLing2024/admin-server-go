@@ -19,6 +19,9 @@ ESTAB  0      0        127.0.0.1:1234    127.0.0.1:22
 	if items[0].Port != 22 || items[0].Process != "sshd" || items[0].Address != "0.0.0.0" {
 		t.Errorf("first item = %+v", items[0])
 	}
+	if items[0].Protocol != "tcp" || items[0].State != "LISTEN" {
+		t.Errorf("first protocol/state = %q/%q", items[0].Protocol, items[0].State)
+	}
 	if items[0].PID == nil || *items[0].PID != 812 {
 		t.Errorf("first pid = %v", items[0].PID)
 	}
@@ -27,6 +30,23 @@ ESTAB  0      0        127.0.0.1:1234    127.0.0.1:22
 	}
 	if items[2].Port != 8080 || items[2].Process != "java" {
 		t.Errorf("third item = %+v", items[2])
+	}
+}
+
+func TestParseSSOutputUDP(t *testing.T) {
+	text := `Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+udp   UNCONN 0      0          127.0.0.53:53       0.0.0.0:*    users:(("systemd-resolve",pid=389,fd=18))
+tcp   LISTEN 0      4096       127.0.0.1:8080      0.0.0.0:*    users:(("java",pid=1001,fd=10))
+`
+	items := parseSSOutput(text)
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2: %+v", len(items), items)
+	}
+	if items[0].Port != 53 || items[0].Protocol != "udp" || items[0].State != "UNCONN" {
+		t.Errorf("udp item = %+v", items[0])
+	}
+	if items[1].Port != 8080 || items[1].Protocol != "tcp" || items[1].State != "LISTEN" {
+		t.Errorf("tcp item = %+v", items[1])
 	}
 }
 

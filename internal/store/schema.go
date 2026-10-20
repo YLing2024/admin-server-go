@@ -3,14 +3,15 @@ package store
 import "sort"
 
 // 指标库的列口径（与旧实现 src/db.ts 的 METRIC_KEYS / AGG_TABLES / METRIC_ROUND 一致）。
-// 固定 12 列之后按启动时探测到的整盘设备追加 disk_io_<dev>_read / _write 速率列。
+// 固定 13 列之后按启动时探测到的整盘设备追加 disk_io_<dev>_read / _write 速率列。
 
-// baseMetricKeys 是固定 12 列（合计口径），永远排在最前。
+// baseMetricKeys 是固定 13 列（合计口径），永远排在最前。
 var baseMetricKeys = []string{
 	"cpu",
 	"mem_percent",
 	"mem_used",
 	"mem_total",
+	"disk_percent",
 	"swap_percent",
 	"psi_mem_avg10",
 	"psi_cpu_avg10",
@@ -27,6 +28,7 @@ var baseMetricRound = map[string]int{
 	"mem_percent":   1,
 	"mem_used":      0,
 	"mem_total":     0,
+	"disk_percent":  1,
 	"swap_percent":  1,
 	"psi_mem_avg10": 2,
 	"psi_cpu_avg10": 2,
@@ -38,7 +40,7 @@ var baseMetricRound = map[string]int{
 }
 
 // MetricKeys 是 raw 与物化桶共用的指标列（顺序即建表顺序）：
-// 固定 12 列 + 每块整盘的按盘速率列。由 SetDiskDevices 在启动时重建。
+// 固定 13 列 + 每块整盘的按盘速率列。由 SetDiskDevices 在启动时重建。
 var MetricKeys = append([]string(nil), baseMetricKeys...)
 
 // MetricRound 是各指标物化值的小数位；按盘速率列一律 0。
@@ -47,7 +49,7 @@ var MetricRound = cloneMetricRound(baseMetricRound)
 // diskDevices 是启动时登记的整盘设备名（按字典序）。
 var diskDevices []string
 
-// SetDiskDevices 登记整盘设备集合并据此重建 MetricKeys / MetricRound：在固定 12 列后按设备名
+// SetDiskDevices 登记整盘设备集合并据此重建 MetricKeys / MetricRound：在固定 13 列后按设备名
 // 字典序追加 `disk_io_<dev>_read` / `disk_io_<dev>_write`（合计列保持不变）。必须在建表 / 迁移
 // 之前调用；重复调用幂等，以最后一次传入的全量集合为准。
 func SetDiskDevices(devs []string) {

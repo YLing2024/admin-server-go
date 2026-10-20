@@ -44,8 +44,18 @@ func New(log *slog.Logger) *Service {
 }
 
 // Info 处理 GET /api/admin/system/info：60s 内复用同一份快照。
+// 端口默认全量（需求：监控页要展示全部监听项）；`?ports=15` 保留旧版 15 条上限，
+// 切片只作用于本次响应，缓存里始终保存全量。
 func (s *Service) Info(w http.ResponseWriter, r *http.Request) {
-	httpx.WriteJSON(w, http.StatusOK, s.cachedInfo())
+	info := s.cachedInfo()
+	if r.URL.Query().Get("ports") == "15" && len(info.Ports.Items) > 15 {
+		info.Ports = Ports{
+			Total: info.Ports.Total,
+			Items: append([]PortItem(nil), info.Ports.Items[:15]...),
+			Error: info.Ports.Error,
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, info)
 }
 
 // Processes 处理 GET /api/admin/system/processes：实时采样 500ms，不缓存。

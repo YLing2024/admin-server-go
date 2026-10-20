@@ -7,7 +7,7 @@ import (
 )
 
 // cpuStateAt 构造测试用快照；聚合行必须等于各核之和，才能验证自洽性。
-func cpuStateAt(at time.Time, agg coreTicks, cores map[int]coreTicks, proc map[int]float64) cpuState {
+func cpuStateAt(at time.Time, agg coreTicks, cores map[int]coreTicks, proc map[int]procCPUState) cpuState {
 	return cpuState{at: at, agg: agg, cores: cores, proc: proc}
 }
 
@@ -21,7 +21,7 @@ func TestDiffCPUStateSelfConsistent(t *testing.T) {
 			0: {total: 5000, idle: 4000},
 			1: {total: 5000, idle: 4000},
 		},
-		map[int]float64{123: 100, 456: 0},
+		map[int]procCPUState{123: {ticks: 100, name: "a"}, 456: {ticks: 0, name: "b"}},
 	)
 	cur := cpuStateAt(base.Add(2*time.Second),
 		coreTicks{total: 11000, idle: 8900},
@@ -29,7 +29,7 @@ func TestDiffCPUStateSelfConsistent(t *testing.T) {
 			0: {total: 5500, idle: 4400}, // Δtotal=500, Δidle=400 → 20%
 			1: {total: 5500, idle: 4500}, // Δtotal=500, Δidle=500 → 0%
 		},
-		map[int]float64{123: 150, 457: 999}, // 123 用 50/1000 → 5%；457 新进程无基线
+		map[int]procCPUState{123: {ticks: 150, name: "a"}, 457: {ticks: 999, name: "c"}}, // 123 用 50/1000 → 5%；457 新进程无基线
 	)
 
 	win, ok := diffCPUState(prev, cur)
@@ -61,9 +61,9 @@ func TestDiffCPUStateSelfConsistent(t *testing.T) {
 func TestDiffCPUStateDiscardsShortWindow(t *testing.T) {
 	base := time.Unix(1700000000, 0)
 	prev := cpuStateAt(base, coreTicks{total: 1000, idle: 800},
-		map[int]coreTicks{0: {total: 1000, idle: 800}}, map[int]float64{1: 10})
+		map[int]coreTicks{0: {total: 1000, idle: 800}}, map[int]procCPUState{1: {ticks: 10, name: "x"}})
 	cur := cpuStateAt(base.Add(500*time.Millisecond), coreTicks{total: 1010, idle: 805},
-		map[int]coreTicks{0: {total: 1010, idle: 805}}, map[int]float64{1: 12})
+		map[int]coreTicks{0: {total: 1010, idle: 805}}, map[int]procCPUState{1: {ticks: 12, name: "x"}})
 
 	if _, ok := diffCPUState(prev, cur); ok {
 		t.Fatal("500ms 窗口应被丢弃")

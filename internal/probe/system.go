@@ -133,6 +133,8 @@ const maxCores = 8
 
 // getCPUInfo 从后台快照组装 CPU 卡片。usage_percent 与 per_core 来自同一对 /proc/stat
 // 快照（total 取 cpu 聚合行、per_core 取 cpuN 行），不再做 EMA，也不再因请求触发采样。
+// usage_15s / usage_60s 是同一 tick 序列的环形缓冲均值，run_queue / blocked 来自
+// 同一个 /proc/stat，top_movers 是该窗口内的增量归因。
 func (s *Service) getCPUInfo() map[string]any {
 	snap := s.currentHostSnapshot()
 	cores := runtime.NumCPU()
@@ -140,11 +142,20 @@ func (s *Service) getCPUInfo() map[string]any {
 	for _, c := range snap.perCore {
 		perCore = append(perCore, map[string]any{"id": c.id, "usage_percent": c.percent})
 	}
+	movers := snap.movers
+	if movers == nil {
+		movers = []cpuMover{}
+	}
 	return map[string]any{
 		"model":         cpuModel(),
 		"usage_percent": snap.cpuPercent,
+		"usage_15s":     snap.usage15s,
+		"usage_60s":     snap.usage60s,
 		"cores":         cores,
 		"per_core":      perCore,
+		"run_queue":     snap.runQueue,
+		"blocked":       snap.blocked,
+		"top_movers":    movers,
 		"loadavg":       []float64{snap.loadavg[0], snap.loadavg[1], snap.loadavg[2]},
 		"load_percent":  snap.loadPercent,
 	}
@@ -155,15 +166,24 @@ func (s *Service) getCPUInfo() map[string]any {
 // CollectSystem 实时采集系统信息；返回的 map 直接就是 GET /api/admin/system 的响应体。
 // CPU / 内存 / 负载只读后台快照，请求路径不推进任何差分基线；其余段失败一律零值兜底。
 func (s *Service) CollectSystem() (map[string]any, error) {
-	mem := s.currentHostSnapshot().mem
+	snap := s.currentHostSnapshot()
+	mem := snap.mem
 	percent := 0.0
 	if mem.Total > 0 {
 		percent = round1((mem.Used / mem.Total) * 100)
 	}
 	// 速率只读后台快照（唯一来源）；累计字节与速率同源，避免同一响应内两个时刻混用。
-	snap := s.currentRateSnapshot()
+	rates := s.currentRateSnapshot()
 	disks := getDisks()
-	applyDiskRates(disks, snap)
+	applyDiskRates(disks, rates)
+	psi := snap.psi
+	if psi == nil {
+		psi = emptyPressure()
+	}
+	services := snap.services
+	if services == nil {
+		services = []serviceCPU{}
+	}
 	return map[string]any{
 		"cpu": s.getCPUInfo(),
 		"memory": map[string]any{
@@ -179,15 +199,18 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 			"swapPercent": mem.SwapPercent,
 			"zram":        getZram(),
 		},
-		"disk":      getDisk(),
-		"disks":     disks,
-		"network":   networkInfo(snap),
-		"disk_io":   diskIoInfo(snap),
-		"processes": getProcesses(),
-		"psi":       readPressure(),
-		"uptime":    uptimeSeconds(),
-		"os":        osType() + " " + osRelease() + " (" + nodeArch() + ")",
-		"hostname":  hostname(),
+		"disk":         getDisk(),
+		"disks":        disks,
+		"network":      networkInfo(rates),
+		"disk_io":      diskIoInfo(rates),
+		"processes":    getProcesses(),
+		"psi":          psi,
+		"top_services": services,
+		"stall_score":  snap.stallScore,
+		"stall_level":  snap.stallLevel,
+		"uptime":       uptimeSeconds(),
+		"os":           osType() + " " + osRelease() + " (" + nodeArch() + ")",
+		"hostname":     hostname(),
 	}, nil
 }
 

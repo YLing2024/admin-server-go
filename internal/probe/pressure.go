@@ -43,6 +43,12 @@ func readPressure() map[string]any {
 	}
 }
 
+// emptyPressure 返回与 readPressure 同形状的空值，供采样器尚未产出第一帧时使用。
+// 响应字段必须稳定存在，但请求路径不允许为了补空值去读 /proc。
+func emptyPressure() map[string]any {
+	return map[string]any{"memory": nil, "cpu": nil, "io": nil}
+}
+
 // PsiHist 是 PSI 历史取值：memory/cpu/io 的 some avg10（原生已是滑动均值）。
 type PsiHist struct {
 	MemAvg10 *float64

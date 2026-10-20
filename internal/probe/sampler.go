@@ -21,30 +21,51 @@ type coreUsage struct {
 	percent float64
 }
 
+// procCPUState 是单个进程的累计 CPU 滴答与进程名。保留进程名是为了让已退出进程
+// 仍能在窗口归因里被认出（/proc 已读不到，只能依赖采样历史）。
+type procCPUState struct {
+	ticks float64
+	name  string
+}
+
 // cpuState 是某一时刻的 /proc/stat 与全部进程累计滴答快照。
 // at 取读取 /proc/stat 之前的时间，保证相邻两帧的窗口与滴答增量对应。
 type cpuState struct {
-	at    time.Time
-	agg   coreTicks
-	cores map[int]coreTicks
-	proc  map[int]float64
+	at       time.Time
+	agg      coreTicks
+	cores    map[int]coreTicks
+	proc     map[int]procCPUState
+	runQueue int
+	blocked  int
 }
 
 // cpuWindow 是同一对快照算出的系统、每核与进程占用。
 type cpuWindow struct {
-	window  time.Duration
-	total   float64
-	perCore []coreUsage
-	proc    map[int]float64
+	window   time.Duration
+	total    float64
+	perCore  []coreUsage
+	proc     map[int]float64
+	runQueue int
+	blocked  int
 }
 
-// hostSnapshot 是后台采样器发布的只读快照：CPU / 内存 / 负载同属一个 tick。
+// hostSnapshot 是后台采样器发布的只读快照：CPU / 内存 / 负载 / PSI / 窗口归因
+// 与 cgroup 服务占用都同属一个 tick。
 type hostSnapshot struct {
 	at          time.Time
 	window      time.Duration
 	cpuPercent  float64
+	usage15s    float64
+	usage60s    float64
+	runQueue    int
+	blocked     int
 	perCore     []coreUsage
 	procCPU     map[int]float64
+	movers      []cpuMover
+	services    []serviceCPU
+	stallScore  float64
+	stallLevel  string
+	psi         map[string]any
 	mem         Meminfo
 	loadavg     [3]float64
 	loadPercent float64
@@ -59,6 +80,9 @@ func (s *Service) StartSampler() {
 		return
 	}
 	s.sampleStarted = true
+	s.cpu15 = newFloatRing(s.windowSamples(15))
+	s.cpu60 = newFloatRing(s.windowSamples(60))
+	s.procHist = nil
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	s.sampleStop = stop
@@ -109,20 +133,42 @@ func (s *Service) sampleInterval() time.Duration {
 	return time.Duration(sec) * time.Second
 }
 
-// sampleAll 执行一个完整 tick。速率与 CPU 各自维护基线，但共用同一时钟节奏。
-func (s *Service) sampleAll() {
-	s.sampleRates()
-	s.sampleHost()
+// windowSamples 把秒窗口换算成 tick 数，保证 usage_15s / usage_60s 在
+// PROBE_INTERVAL_SEC 变化时仍是真实的 15 秒 / 60 秒语义。
+func (s *Service) windowSamples(seconds int) int {
+	step := int(s.sampleInterval() / time.Second)
+	if step < 1 {
+		step = 1
+	}
+	n := seconds / step
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
-// sampleHost 采一次 CPU / 进程 / 内存 / 负载。CPU 读失败时保留上一次快照并告警；
-// 窗口不足 1 秒时不发布新值，也不前移基线，让窗口自然累积到足够长。
+// sampleAll 执行一个完整 tick。速率、主机指标与 cgroup 服务占用共用同一时钟节奏；
+// 单次采集超过 200ms 说明遍历开销异常，记 warn 但不影响本轮结果。
+func (s *Service) sampleAll() {
+	start := time.Now()
+	s.sampleRates()
+	s.sampleHost()
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		s.log.Warn("系统采样单次耗时超过 200ms", "elapsed", elapsed.String())
+	}
+}
+
+// sampleHost 采一次 CPU / 进程 / 内存 / 负载 / PSI / cgroup 服务占用。
+// CPU 读失败时保留上一次快照并告警；窗口不足 1 秒时不发布新值，也不前移基线，
+// 让窗口自然累积到足够长。
 func (s *Service) sampleHost() {
 	mem := ReadMeminfo()
 	load, loadErr := readLoadAvg()
+	psi := readPressure()
 
 	s.sampleMu.Lock()
 	s.sampleSnap.mem = mem
+	s.sampleSnap.psi = psi
 	if loadErr == nil {
 		s.sampleSnap.loadavg = load
 		cores := runtime.NumCPU()
@@ -140,9 +186,15 @@ func (s *Service) sampleHost() {
 		s.log.Warn("读取 /proc/stat 失败，保留上一次 CPU 采样", "err", err)
 		return
 	}
+	// cgroup CPU 与进程 CPU 都取本轮 tick 的时间点做差，互不依赖，读文件失败只让该块为空。
+	services := s.sampleCgroupCPU(cur.at)
 
 	s.sampleMu.Lock()
 	defer s.sampleMu.Unlock()
+	s.sampleSnap.runQueue = cur.runQueue
+	s.sampleSnap.blocked = cur.blocked
+	s.sampleSnap.services = services
+
 	prev := s.samplePrev
 	if prev == nil {
 		s.samplePrev = &cur
@@ -156,8 +208,26 @@ func (s *Service) sampleHost() {
 	s.sampleSnap.at = cur.at
 	s.sampleSnap.window = win.window
 	s.sampleSnap.cpuPercent = win.total
+	s.sampleSnap.runQueue = win.runQueue
+	s.sampleSnap.blocked = win.blocked
 	s.sampleSnap.perCore = win.perCore
 	s.sampleSnap.procCPU = win.proc
+
+	if s.cpu15 == nil || s.cpu60 == nil {
+		s.cpu15 = newFloatRing(s.windowSamples(15))
+		s.cpu60 = newFloatRing(s.windowSamples(60))
+	}
+	s.cpu15.push(win.total)
+	s.cpu60.push(win.total)
+	s.sampleSnap.usage15s = round1(s.cpu15.avg())
+	s.sampleSnap.usage60s = round1(s.cpu60.avg())
+
+	s.pushProcSample(procSample{at: cur.at, total: cur.agg.total, procs: cur.proc})
+	moverWindow := time.Duration(s.windowSamples(15)) * s.sampleInterval()
+	s.sampleSnap.movers = computeTopMovers(s.procHist, moverWindow, win.proc, 5)
+
+	cores := runtime.NumCPU()
+	s.sampleSnap.stallScore, s.sampleSnap.stallLevel = computeStallScore(psi, win.runQueue, cores)
 }
 
 // currentHostSnapshot 返回最近一次快照的副本。快照发布后不再被原地修改，
@@ -168,6 +238,8 @@ func (s *Service) currentHostSnapshot() hostSnapshot {
 	snap := s.sampleSnap
 	snap.perCore = append([]coreUsage(nil), snap.perCore...)
 	snap.procCPU = cloneProcPct(snap.procCPU)
+	snap.movers = append([]cpuMover(nil), snap.movers...)
+	snap.services = append([]serviceCPU(nil), snap.services...)
 	return snap
 }
 
@@ -175,15 +247,44 @@ func (s *Service) currentHostSnapshot() hostSnapshot {
 // 进程扫描发生在 /proc/stat 之后，相邻两帧的扫描偏移相同，故进程窗口与系统窗口一致。
 func readCPUState() (cpuState, error) {
 	at := time.Now()
-	agg, cores, err := readCPUTicks()
+	data, err := os.ReadFile("/proc/stat")
 	if err != nil {
 		return cpuState{}, err
 	}
+	agg, cores, err := parseCPUStat(string(data))
+	if err != nil {
+		return cpuState{}, err
+	}
+	runQueue, blocked := parseProcQueue(string(data))
 	proc, err := readProcTicks()
 	if err != nil {
 		return cpuState{}, fmt.Errorf("读取 /proc 进程列表失败: %w", err)
 	}
-	return cpuState{at: at, agg: agg, cores: cores, proc: proc}, nil
+	return cpuState{at: at, agg: agg, cores: cores, proc: proc, runQueue: runQueue, blocked: blocked}, nil
+}
+
+// parseProcQueue 解析 /proc/stat 的 procs_running / procs_blocked。
+// 运行队列比 1 分钟负载更及时：running > 核数说明已经排队，blocked > 0 说明有进程卡在 IO。
+func parseProcQueue(content string) (running, blocked int) {
+	for _, line := range strings.Split(content, "\n") {
+		cols := splitFields(line)
+		if len(cols) < 2 {
+			continue
+		}
+		switch cols[0] {
+		case "procs_running":
+			running = int(atoi(cols[1]))
+		case "procs_blocked":
+			blocked = int(atoi(cols[1]))
+		}
+	}
+	if running < 0 {
+		running = 0
+	}
+	if blocked < 0 {
+		blocked = 0
+	}
+	return running, blocked
 }
 
 // readCPUTicks 解析 /proc/stat 的 cpu 聚合行与 cpuN 行。
@@ -254,13 +355,13 @@ func parseCPULine(fields []string) (coreTicks, bool) {
 	return coreTicks{total: total, idle: idle}, true
 }
 
-// readProcTicks 单次遍历 /proc，读出全部进程的累计 (utime+stime) 滴答。
-func readProcTicks() (map[int]float64, error) {
+// readProcTicks 单次遍历 /proc，读出全部进程的累计 (utime+stime) 滴答与进程名。
+func readProcTicks() (map[int]procCPUState, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[int]float64, len(entries))
+	out := make(map[int]procCPUState, len(entries))
 	for _, e := range entries {
 		name := e.Name()
 		if !isDigits(name) {
@@ -270,8 +371,8 @@ func readProcTicks() (map[int]float64, error) {
 		if err != nil {
 			continue
 		}
-		if ticks, ok := procCPUTicks(pid); ok {
-			out[pid] = ticks
+		if info, ok := procCPUInfo(pid); ok {
+			out[pid] = info
 		}
 	}
 	return out, nil
@@ -320,14 +421,17 @@ func diffCPUState(prev, cur cpuState) (cpuWindow, bool) {
 		if !ok {
 			continue
 		}
-		d := c - p
+		d := c.ticks - p.ticks
 		if d < 0 {
 			continue
 		}
 		proc[pid] = round1(clampPercent(d / dTotal * 100))
 	}
 
-	return cpuWindow{window: window, total: total, perCore: perCore, proc: proc}, true
+	return cpuWindow{
+		window: window, total: total, perCore: perCore, proc: proc,
+		runQueue: cur.runQueue, blocked: cur.blocked,
+	}, true
 }
 
 // readLoadAvg 读取 /proc/loadavg 前三列。

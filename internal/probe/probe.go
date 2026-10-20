@@ -34,6 +34,18 @@ type Service struct {
 	sampleStop    chan struct{}
 	sampleDone    chan struct{}
 	sampleStarted bool
+
+	// 以下字段只在 sampleMu 内推进：三档 CPU 窗口的环形缓冲与进程窗口历史。
+	// 环形缓冲长度由 tick 间隔换算，保证 15s / 60s 的语义不随配置漂移。
+	cpu15    *floatRing
+	cpu60    *floatRing
+	procHist []procSample
+
+	// cgMu 保护 cgroup 单元级 CPU 的上一次 usage_usec 基线。与进程维度分开加锁，
+	// 避免逐个单元读文件时阻塞 HTTP 读取 CPU 快照。
+	cgMu     sync.Mutex
+	cgPrev   map[string]cgroupUsage
+	cgPrevAt time.Time
 }
 
 // coreTicks 是单个核的累计时钟滴答（内核口径）。

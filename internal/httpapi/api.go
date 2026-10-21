@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"admin-server-go/internal/anomaly"
 	"admin-server-go/internal/auth"
 	"admin-server-go/internal/config"
 	"admin-server-go/internal/history"
@@ -78,6 +79,7 @@ type Options struct {
 	System  SystemInfoService
 	Tools   ToolsService
 	Logs    *logs.Service
+	Anomaly *anomaly.Service
 }
 
 // Server 是 HTTP 装配体。
@@ -93,6 +95,7 @@ type Server struct {
 	system  SystemInfoService
 	tools   ToolsService
 	logs    *logs.Service
+	anomaly *anomaly.Service
 	term    *term.Service
 	history *history.Service
 
@@ -116,6 +119,7 @@ func New(opts Options) *Server {
 		system:      opts.System,
 		tools:       opts.Tools,
 		logs:        opts.Logs,
+		anomaly:     opts.Anomaly,
 		term:        term.New(term.Options{Cfg: opts.Cfg, Redis: opts.Redis, Log: opts.Log}),
 		history:     history.New(history.Options{Cfg: opts.Cfg, Log: opts.Log}),
 		totpLimiter: auth.NewRateLimiter(5, []int{60, 300, 900}),

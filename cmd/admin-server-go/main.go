@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"admin-server-go/internal/anomaly"
 	"admin-server-go/internal/apps"
 	"admin-server-go/internal/config"
 	"admin-server-go/internal/httpapi"
@@ -108,6 +109,17 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		logsSvc = logs.New(logsDB, logger)
 	}
 
+	// 基线异常检测：用日志库连接写事件（低频写入，与指标库解耦）。
+	var anomalySvc *anomaly.Service
+	if logsDB != nil {
+		if _, err := logsDB.ExecContext(ctx, anomaly.DDL); err != nil {
+			logger.Warn("异常事件表初始化失败", "error", err)
+		} else {
+			anomalySvc = anomaly.New(logsDB, anomaly.DefaultConfig())
+			go runAnomalyLoop(ctx, probeSvc, anomalySvc, logger)
+		}
+	}
+
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
 	sshKeysSvc := sshkeys.New(sshkeys.Options{Cfg: cfg, DB: metricsDB, Log: logger})
@@ -125,6 +137,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		System:  systemSvc,
 		Tools:   toolsSvc,
 		Logs:    logsSvc,
+		Anomaly: anomalySvc,
 	})
 
 	server := &http.Server{
@@ -205,4 +218,32 @@ func openLogsDB(ctx context.Context, cfg *config.Config) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// runAnomalyLoop 每 10 秒取一次系统快照喂给基线检测器。
+// 频率取 10s 而非 1s：基线是统计量，1s 采样只会让方差被噪声撑大、降低灵敏度。
+func runAnomalyLoop(ctx context.Context, probeSvc *probe.Service, svc *anomaly.Service, logger *slog.Logger) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			snap, err := probeSvc.CollectSystem()
+			if err != nil {
+				continue
+			}
+			for k, v := range anomaly.Extract(snap) {
+				out := svc.Observe(k, v)
+				if out.Fired {
+					if err := svc.Record(ctx, out); err != nil && logger != nil {
+						logger.Warn("异常事件写入失败", "metric", k, "error", err)
+					} else if logger != nil {
+						logger.Info("检测到异常", "metric", k, "value", out.Value, "z", out.Z)
+					}
+				}
+			}
+		}
+	}
 }

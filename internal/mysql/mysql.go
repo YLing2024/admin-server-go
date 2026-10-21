@@ -45,6 +45,41 @@ func BuildDSN(host string, port int, name, user, password string) string {
 }
 
 func metricsDDL() []string {
+	// 告警规则与事件：与指标同库，便于同事务/同备份。
+	// duration_sec 是「连续满足多少秒」才触发，cooldown_sec 是两次推送的最小间隔。
+	alertDDL := []string{
+		`CREATE TABLE IF NOT EXISTS alert_rules (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			name VARCHAR(120) NOT NULL,
+			metric VARCHAR(32) NOT NULL,
+			op VARCHAR(8) NOT NULL,
+			threshold DOUBLE NOT NULL,
+			duration_sec INT NOT NULL DEFAULT 60,
+			severity VARCHAR(8) NOT NULL DEFAULT 'warn',
+			enabled TINYINT(1) NOT NULL DEFAULT 1,
+			cooldown_sec INT NOT NULL DEFAULT 900,
+			created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS alert_events (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			rule_id BIGINT NOT NULL,
+			rule_name VARCHAR(120) NOT NULL,
+			metric VARCHAR(32) NOT NULL,
+			severity VARCHAR(8) NOT NULL,
+			value DOUBLE NOT NULL,
+			threshold DOUBLE NOT NULL,
+			started_at DATETIME(3) NOT NULL,
+			ended_at DATETIME(3) NULL,
+			notified TINYINT(1) NOT NULL DEFAULT 0,
+			KEY idx_started (started_at),
+			KEY idx_rule (rule_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	}
+	return append(alertDDL, metricStmts()...)
+}
+
+// metricStmts 返回指标原始表与三个物化桶的建表语句。
+func metricStmts() []string {
 	cols := make([]string, len(store.MetricKeys))
 	for i, k := range store.MetricKeys {
 		cols[i] = k + " DOUBLE"

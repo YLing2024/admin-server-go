@@ -291,3 +291,17 @@ func atoiDefault(raw string, def int) int {
 	}
 	return n
 }
+
+// handleAnomalies 返回最近的基线异常事件（谁偏离了自己的历史）。
+func (s *Server) handleAnomalies(w http.ResponseWriter, r *http.Request) {
+	if s.anomaly == nil {
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		return
+	}
+	items, err := s.anomaly.List(r.Context(), atoiDefault(r.URL.Query().Get("limit"), 100))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "异常查询失败")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}

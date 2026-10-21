@@ -894,3 +894,16 @@
 
 - `level` 已归一：journald 的 priority 映射为 error/warn/notice/info/debug；access 的 status 映射为 5xx=error、4xx=warn、其余 info
 - 库未配置或连不上时返回 503；参数非法返回 400
+
+### GET /api/admin/anomalies
+
+- 鉴权：`authRequired`
+- 说明：返回基线异常事件（各指标偏离自身历史 > 4σ 时记录），不是阈值告警
+- 请求参数：`limit`（默认 100，上限 500）
+- 成功 200：
+
+```json
+{ "items": [ { "ts": "2026-10-21T02:30:00Z", "metric": "cpu_percent", "value": 61.2, "mean": 12.4, "stddev": 8.1, "z": 6.0 } ] }
+```
+
+- 未启用检测时返回 `{"items": []}`

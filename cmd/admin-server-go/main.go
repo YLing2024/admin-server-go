@@ -28,6 +28,7 @@ import (
 	"admin-server-go/internal/mysql"
 	"admin-server-go/internal/ops"
 	"admin-server-go/internal/probe"
+	"admin-server-go/internal/sites"
 	"admin-server-go/internal/sshkeys"
 	"admin-server-go/internal/state"
 	"admin-server-go/internal/store"
@@ -144,6 +145,12 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 	sshKeysSvc := sshkeys.New(sshkeys.Options{Cfg: cfg, DB: metricsDB, Log: logger})
 	systemSvc := sysinfo.New(logger)
 	toolsSvc := bwtools.New(bwtools.Options{Cfg: cfg})
+	sitesSvc := sites.New(sites.Options{
+		Log:       logger,
+		NginxBin:  cfg.SitesNginxBin,
+		CertDir:   cfg.SitesCertDir,
+		BackupDir: cfg.SitesBackupDir,
+	})
 
 	handler := httpapi.New(httpapi.Options{
 		Cfg:     cfg,
@@ -159,6 +166,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		Anomaly: anomalySvc,
 		Alerts:  alertsSvc,
 		Ops:     opsSvc,
+		Sites:   sitesSvc,
 	})
 
 	server := &http.Server{

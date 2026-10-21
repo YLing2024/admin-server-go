@@ -938,3 +938,111 @@
 - 成功 200：`{"ok":true,"kind":"service","name":"x.service","action":"restart","output":"...","elapsedMs":123}`
 - 失败 400：`{"ok":false,"error":"...","result":{...}}`
 - 安全约束：`confirm` 必须等于 `name`；`ssh/sshd/networking/systemd-*` 等服务在拒绝名单；全局 3 秒限速；命令 30 秒超时；每个动作写审计 `/data/admin-server-go/audit.log`
+
+## 五、站点 / 证书 / 备份（只读）
+
+三条接口都只读：不写 nginx 配置、不触发 certbot、不清理备份。每条接口内部 10 秒超时，
+结果进程内缓存 60 秒（不同接口各自缓存）；缓存期内重复请求不会再次 fork 外部命令。
+路径可用环境变量覆盖：`SITES_NGINX_BIN`（默认 `nginx`）、`SITES_CERT_DIR`（默认
+`/etc/letsencrypt/live`）、`SITES_BACKUP_DIR`（默认 `/data/backups`）。
+
+### GET /api/admin/sites/nginx
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/sites/nginx"`
+- 数据来源：`nginx -T` 展开后的配置；每个 `server {}` 块一行，正则形式的 `server_name`
+  （以 `~` 开头）排在最后。
+- 成功 200：
+
+```json
+{
+  "sites": [
+    {
+      "serverName": "admin.example.com",
+      "listen": ["443 ssl http2", "80"],
+      "root": "/var/www/admin",
+      "proxyPass": "http://127.0.0.1:18920",
+      "certPath": "/etc/letsencrypt/live/admin.example.com/fullchain.pem",
+      "configFile": "/etc/nginx/conf.d/admin.conf",
+      "redirect": null,
+      "isRegex": false
+    }
+  ]
+}
+```
+
+- 字段：`root` / `proxyPass` / `certPath` / `redirect` 缺失时为 `null`；`listen` 始终是数组；
+  `configFile` 取自 `nginx -T` 输出里的 `# configuration file <path>:` 标记。
+- 失败 200：`nginx -T` 失败或未解析出 server 块时返回 `{"sites":[],"error":"…"}`（不返回 5xx）。
+- 副作用：无；只执行 `nginx -T`（不会 reload）。
+- 幂等：幂等；无显式限流。
+
+### GET /api/admin/sites/certs
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/sites/certs"`
+- 数据来源：`<SITES_CERT_DIR>/*/fullchain.pem`，逐张执行
+  `openssl x509 -noout -subject -enddate -issuer`；`autoRenew` 取 `systemctl is-active certbot.timer`
+  （所有条目共用一次探测）。
+- 成功 200：
+
+```json
+{
+  "certs": [
+    {
+      "domain": "admin.example.com",
+      "notAfter": "2027-01-19T12:00:00Z",
+      "daysLeft": 90,
+      "issuer": "Let's Encrypt",
+      "autoRenew": true
+    }
+  ]
+}
+```
+
+- `daysLeft`：`notAfter - 当前时间` 的完整天数（向下取整）；已过期为负数。前端分级：
+  `> 21` 绿、`7–21` 橙、`< 7` 红。
+- `issuer`：优先取签发者组织名（`O=`），缺失时退回 CN。
+- 单张证书损坏时该条带 `error`（`notAfter` / `daysLeft` 为 `null`），不影响其它条目；
+  证书目录不可读时返回 `{"certs":[],"error":"…"}`。
+- 副作用：无；只读证书文件与 systemd 状态。
+- 幂等：幂等；无显式限流。
+
+### GET /api/admin/sites/backups
+
+- 鉴权：`authRequired`
+- 请求参数：无
+- curl：`curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/admin/sites/backups"`
+- 数据来源：`<SITES_BACKUP_DIR>` 下的一级目录 + 名字含 `backup` 的 systemd timer。
+  目录大小用**一次** `du -sb -- <全部目录>` 批量计算；`systemctl list-units` 一次、
+  `systemctl show -p Id,NextElapseUSecRealtime,LastTriggerUSec` 一次。
+- 成功 200：
+
+```json
+{
+  "backups": [
+    { "name": "backup-2026-10-21", "size": 1073741824, "modifiedAt": 1792544400000 }
+  ],
+  "timers": [
+    {
+      "name": "daily-full-backup.timer",
+      "nextElapseUSecRealtime": "Thu 2026-10-22 04:02:53 HKT",
+      "lastTriggerUSec": "Wed 2026-10-21 04:03:31 HKT"
+    }
+  ],
+  "total": 47,
+  "totalSize": 6499815374,
+  "latestModifiedAt": 1792544400000
+}
+```
+
+- `backups` 按 `modifiedAt` 倒序，最多 50 条；`total` / `totalSize` / `latestModifiedAt`
+  统计截断前的全部一级目录，供前端摘要使用。
+- `size` 为字节（`du -sb` 口径）；`modifiedAt` 为 epoch 毫秒。
+- `timers[].nextElapseUSecRealtime` / `lastTriggerUSec` 保留 `systemctl show` 的原始文本。
+- 子命令失败只影响对应字段：目录读取或 `du` 失败时 `backups` 为空并带 `error`，
+  timer 仍尽量返回；timer 采集失败不影响目录列表。
+- 副作用：无；只执行只读命令与目录遍历。
+- 幂等：幂等；无显式限流。

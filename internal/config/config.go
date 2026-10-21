@@ -63,6 +63,12 @@ type Config struct {
 
 	HermesStateDB string
 
+	// Sites* 是「站点」页三条只读采集路径。默认值对应生产布局，可用环境变量覆盖，
+	// 便于在测试机或不同发行版上复用同一套解析逻辑。
+	SitesNginxBin  string
+	SitesCertDir   string
+	SitesBackupDir string
+
 	AuthCenterBaseURL           string
 	AuthCenterInternalTokenFile string
 
@@ -163,6 +169,9 @@ func Load(get func(string) string) (*Config, error) {
 		HistoryFile:                 trimOr(get("ADMIN_HISTORY_FILE"), filepath.Join(tmp, "admin-server-go-history.json")),
 		TotpSecretFile:              trimOr(get("ADMIN_TOTP_SECRET_FILE"), filepath.Join(repoRoot, "data", "totp-secret.json")),
 		HermesStateDB:               trimOr(get("HERMES_STATE_DB"), filepath.Join(os.Getenv("HOME"), ".hermes", "state.db")),
+		SitesNginxBin:               trimOr(get("SITES_NGINX_BIN"), "nginx"),
+		SitesCertDir:                trimOr(get("SITES_CERT_DIR"), "/etc/letsencrypt/live"),
+		SitesBackupDir:              trimOr(get("SITES_BACKUP_DIR"), "/data/backups"),
 		AuthCenterBaseURL:           strings.TrimRight(strings.TrimSpace(get("AUTH_CENTER_BASE_URL")), "/"),
 		AuthCenterInternalTokenFile: trimOr(get("AUTH_CENTER_INTERNAL_TOKEN_FILE"), filepath.Join(repoRoot, "..", "auth-server", "internal-token")),
 		ProcMaxRows:                 procMaxRows,

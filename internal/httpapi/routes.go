@@ -48,6 +48,11 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "GET /api/admin/alerts/events", auth: authRequired, handler: s.handleAlertEvents},
 		{pattern: "POST /api/admin/ops", auth: authRequired, handler: s.handleOps},
 
+		// ⑨ sites：站点 / 证书 / 备份（只读，60s 缓存，见 internal/sites）
+		{pattern: "GET /api/admin/sites/nginx", auth: authRequired, handler: s.sites.Nginx},
+		{pattern: "GET /api/admin/sites/certs", auth: authRequired, handler: s.sites.Certs},
+		{pattern: "GET /api/admin/sites/backups", auth: authRequired, handler: s.sites.Backups},
+
 		// ② auth：模式探测 / 本地登录登出 / 当前身份 / TOTP / 设备会话转发 / 改密
 		{pattern: "GET /api/admin/auth-mode", handler: s.handleAuthMode},
 		{pattern: "POST /api/admin/login", builtinOnly: true, handler: s.handleLogin},

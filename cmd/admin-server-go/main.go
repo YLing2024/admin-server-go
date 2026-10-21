@@ -133,7 +133,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 			Interval: time.Minute,
 		})
 		go alertsSvc.Start(ctx)
-		go seedAlertRules(ctx, metricsDB.SQL, logger)
+		go seedAlertRules(ctx, metricsDB.SQL, alertsSvc, logger)
 	}
 
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
@@ -266,7 +266,7 @@ func runAnomalyLoop(ctx context.Context, probeSvc *probe.Service, svc *anomaly.S
 }
 
 // seedAlertRules 在规则表为空时写入几条默认规则，避免"装了但一条规则都没有"。
-func seedAlertRules(ctx context.Context, db *sql.DB, logger *slog.Logger) {
+func seedAlertRules(ctx context.Context, db *sql.DB, svc *alerts.Service, logger *slog.Logger) {
 	var n int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM alert_rules").Scan(&n); err != nil {
 		if logger != nil {
@@ -298,6 +298,9 @@ func seedAlertRules(ctx context.Context, db *sql.DB, logger *slog.Logger) {
 			}
 			return
 		}
+	}
+	if svc != nil {
+		_ = svc.Reload(ctx) // 种子写完立刻让引擎看到，否则要等下一次重启
 	}
 	if logger != nil {
 		logger.Info("已写入默认告警规则", "count", len(defaults))

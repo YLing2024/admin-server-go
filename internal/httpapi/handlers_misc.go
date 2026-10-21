@@ -320,6 +320,9 @@ func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "读取告警规则失败")
 		return
 	}
+	if items == nil {
+		items = []alerts.Rule{}
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 

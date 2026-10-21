@@ -46,6 +46,7 @@ func (s *Server) routeTable() []apiRoute {
 		{pattern: "PATCH /api/admin/alerts/rules/:id", auth: authRequired, handler: s.handleAlertRuleUpdate},
 		{pattern: "DELETE /api/admin/alerts/rules/:id", auth: authRequired, handler: s.handleAlertRuleDelete},
 		{pattern: "GET /api/admin/alerts/events", auth: authRequired, handler: s.handleAlertEvents},
+		{pattern: "POST /api/admin/ops", auth: authRequired, handler: s.handleOps},
 
 		// ② auth：模式探测 / 本地登录登出 / 当前身份 / TOTP / 设备会话转发 / 改密
 		{pattern: "GET /api/admin/auth-mode", handler: s.handleAuthMode},

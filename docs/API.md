@@ -929,3 +929,12 @@
 
 - 鉴权：`authRequired`；参数 `limit`（默认 100）；返回 `{"items":[{ruleName,severity,value,threshold,startedAt,endedAt,notified}]}`
 - 判定每分钟一次，连续满足 `durationSec` 才触发，`cooldownSec` 内不重复推送
+
+### POST /api/admin/ops
+
+- 鉴权：`authRequired`
+- 用途：受控运维动作——服务启停、容器重启
+- body：`{"kind":"service|container","name":"<单元名或容器名>","action":"start|stop|restart","confirm":"<必须原样等于 name>"}`
+- 成功 200：`{"ok":true,"kind":"service","name":"x.service","action":"restart","output":"...","elapsedMs":123}`
+- 失败 400：`{"ok":false,"error":"...","result":{...}}`
+- 安全约束：`confirm` 必须等于 `name`；`ssh/sshd/networking/systemd-*` 等服务在拒绝名单；全局 3 秒限速；命令 30 秒超时；每个动作写审计 `/data/admin-server-go/audit.log`

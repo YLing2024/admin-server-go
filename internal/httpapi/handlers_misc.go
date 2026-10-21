@@ -13,6 +13,7 @@ import (
 	"admin-server-go/internal/auth"
 	"admin-server-go/internal/httpx"
 	"admin-server-go/internal/logs"
+	"admin-server-go/internal/ops"
 	"admin-server-go/internal/util"
 )
 
@@ -418,4 +419,26 @@ func atofDefault(raw string, def float64) float64 {
 		return def
 	}
 	return v
+}
+
+// handleOps 执行受控运维动作（服务启停 / 容器重启）。
+// 安全约束在 ops.Service 内部：confirm 必须等于目标名、服务有拒绝名单、3 秒限速、30 秒超时。
+func (s *Server) handleOps(w http.ResponseWriter, r *http.Request) {
+	if s.ops == nil {
+		httpx.Error(w, http.StatusNotImplemented, "运维动作未启用")
+		return
+	}
+	body := httpx.Body(r)
+	req := ops.Request{
+		Kind:    strings.TrimSpace(httpx.BodyString(body, "kind")),
+		Name:    strings.TrimSpace(httpx.BodyString(body, "name")),
+		Action:  strings.TrimSpace(httpx.BodyString(body, "action")),
+		Confirm: strings.TrimSpace(httpx.BodyString(body, "confirm")),
+	}
+	res, err := s.ops.Execute(r.Context(), req)
+	if err != nil {
+		httpx.WriteJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error(), "result": res})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, res)
 }

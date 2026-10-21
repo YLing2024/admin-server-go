@@ -26,6 +26,7 @@ import (
 	"admin-server-go/internal/logs"
 	"admin-server-go/internal/metrics"
 	"admin-server-go/internal/mysql"
+	"admin-server-go/internal/ops"
 	"admin-server-go/internal/probe"
 	"admin-server-go/internal/sshkeys"
 	"admin-server-go/internal/state"
@@ -136,6 +137,8 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		go seedAlertRules(ctx, metricsDB.SQL, alertsSvc, logger)
 	}
 
+	opsSvc := ops.New(logger, "/data/admin-server-go/audit.log")
+
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
 	sshKeysSvc := sshkeys.New(sshkeys.Options{Cfg: cfg, DB: metricsDB, Log: logger})
@@ -155,6 +158,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		Logs:    logsSvc,
 		Anomaly: anomalySvc,
 		Alerts:  alertsSvc,
+		Ops:     opsSvc,
 	})
 
 	server := &http.Server{

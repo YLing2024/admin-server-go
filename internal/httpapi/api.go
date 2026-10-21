@@ -20,6 +20,7 @@ import (
 	"admin-server-go/internal/config"
 	"admin-server-go/internal/history"
 	"admin-server-go/internal/httpx"
+	"admin-server-go/internal/ops"
 	"admin-server-go/internal/state"
 	"admin-server-go/internal/term"
 )
@@ -82,6 +83,7 @@ type Options struct {
 	Logs    *logs.Service
 	Anomaly *anomaly.Service
 	Alerts  *alerts.Service
+	Ops     *ops.Service
 }
 
 // Server 是 HTTP 装配体。
@@ -99,6 +101,7 @@ type Server struct {
 	logs    *logs.Service
 	anomaly *anomaly.Service
 	alerts  *alerts.Service
+	ops     *ops.Service
 	term    *term.Service
 	history *history.Service
 
@@ -124,6 +127,7 @@ func New(opts Options) *Server {
 		logs:        opts.Logs,
 		anomaly:     opts.Anomaly,
 		alerts:      opts.Alerts,
+		ops:         opts.Ops,
 		term:        term.New(term.Options{Cfg: opts.Cfg, Redis: opts.Redis, Log: opts.Log}),
 		history:     history.New(history.Options{Cfg: opts.Cfg, Log: opts.Log}),
 		totpLimiter: auth.NewRateLimiter(5, []int{60, 300, 900}),

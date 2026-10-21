@@ -883,7 +883,17 @@
 ```json
 {
   "entries": [
-    { "ts": "2026-10-20T16:21:25Z", "source": "system", "name": "nginx.service", "level": "info", "message": "..." }
+    {
+      "ts": "2026-10-20T16:21:25.123Z",
+      "source": "system",
+      "name": "nginx.service",
+      "level": "info",
+      "message": "...",
+      "host": "web-1",
+      "unit": "nginx.service",
+      "process": "nginx",
+      "pid": "1234"
+    }
   ],
   "hasMore": true,
   "source": "system",
@@ -892,6 +902,7 @@
 }
 ```
 
+- 详情字段按来源可选，均为 `omitempty`（没有该列时不出现）：`host`（journald 主机名）、`unit`（journald 单元）、`container`（容器名）、`file_path`（业务文件路径）、`process`（journald `ident`）、`pid`、`method` / `path` / `status` / `duration`（秒，字符串）/ `client_ip`（仅 nginx access）
 - `level` 已归一：journald 的 priority 映射为 error/warn/notice/info/debug；access 的 status 映射为 5xx=error、4xx=warn、其余 info
 - 库未配置或连不上时返回 503；参数非法返回 400
 

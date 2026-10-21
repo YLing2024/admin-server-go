@@ -25,7 +25,23 @@ const (
 	SourceError     Source = "error"     // http_error：nginx error
 )
 
-// 每张表在统一 DTO 里的字段映射：name 列、level 列。
+// detailExprs 的列顺序：详情抽屉按这个顺序扫进 Entry，增删必须两端同步。
+const (
+	detailHost = iota
+	detailUnit
+	detailContainer
+	detailFilePath
+	detailProcess
+	detailPID
+	detailMethod
+	detailPath
+	detailStatus
+	detailDuration
+	detailClientIP
+	detailColumnCount
+)
+
+// 每张表在统一 DTO 里的字段映射：name 列、level 列、详情列。
 var sourceSpec = map[Source]struct {
 	table string
 	// nameExpr / levelExpr / messageExpr 直接进 SQL：各表结构不同，
@@ -34,27 +50,64 @@ var sourceSpec = map[Source]struct {
 	levelExpr   string
 	messageExpr string
 	extraSearch []string
+	// detail 按 detail* 常量下标给出各表可提供的详情列；空串表示该表没有这一列。
+	detail [detailColumnCount]string
 }{
-	SourceSystem:    {table: "system_logs", nameExpr: "unit", levelExpr: "priority", messageExpr: "message", extraSearch: []string{"ident"}},
-	SourceContainer: {table: "container_logs", nameExpr: "container", levelExpr: "stream", messageExpr: "message", extraSearch: []string{"image"}},
-	SourceFile:      {table: "file_logs", nameExpr: "source_id", levelExpr: "level", messageExpr: "message", extraSearch: []string{"path"}},
+	SourceSystem: {
+		table: "system_logs", nameExpr: "unit", levelExpr: "priority", messageExpr: "message",
+		extraSearch: []string{"ident"},
+		detail: [detailColumnCount]string{
+			detailHost: "hostname", detailUnit: "unit", detailProcess: "ident", detailPID: "pid",
+		},
+	},
+	SourceContainer: {
+		table: "container_logs", nameExpr: "container", levelExpr: "stream", messageExpr: "message",
+		extraSearch: []string{"image"},
+		detail: [detailColumnCount]string{
+			detailContainer: "container",
+		},
+	},
+	SourceFile: {
+		table: "file_logs", nameExpr: "source_id", levelExpr: "level", messageExpr: "message",
+		extraSearch: []string{"path"},
+		detail: [detailColumnCount]string{
+			detailFilePath: "path",
+		},
+	},
 	SourceAccess: {
 		table:       "http_access",
 		nameExpr:    "remote_addr",
 		levelExpr:   "status",
 		messageExpr: "CONCAT(IFNULL(method,'-'), ' ', IFNULL(path,'-'), ' → ', IFNULL(status,0), ' · ', IFNULL(bytes,0), 'B · ', ROUND(IFNULL(req_time,0),3), 's')",
 		extraSearch: []string{"path", "method"},
+		detail: [detailColumnCount]string{
+			detailMethod: "method", detailPath: "path", detailStatus: "status",
+			detailDuration: "req_time", detailClientIP: "remote_addr",
+		},
 	},
 	SourceError: {table: "http_error", nameExpr: "'nginx'", levelExpr: "level", messageExpr: "message"},
 }
 
-// Entry 是统一后的日志行。
+// Entry 是统一后的日志行。详情字段按来源可缺省：新字段一律 omitempty，
+// 不改变既有 entries / hasMore / source / limit / offset 的契约。
 type Entry struct {
 	TS      time.Time `json:"ts"`
 	Source  string    `json:"source"`
 	Name    string    `json:"name"`
 	Level   string    `json:"level"`
 	Message string    `json:"message"`
+
+	Host      string `json:"host,omitempty"`
+	Unit      string `json:"unit,omitempty"`
+	Container string `json:"container,omitempty"`
+	FilePath  string `json:"file_path,omitempty"`
+	Process   string `json:"process,omitempty"`
+	PID       string `json:"pid,omitempty"`
+	Method    string `json:"method,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Duration  string `json:"duration,omitempty"`
+	ClientIP  string `json:"client_ip,omitempty"`
 }
 
 // Query 是一次检索条件。零值表示不限。
@@ -131,8 +184,9 @@ func (s *Service) Query(ctx context.Context, q Query) (Result, error) {
 
 	// 多取一条用于判断是否还有下一页。
 	sqlText := fmt.Sprintf(
-		"SELECT ts, COALESCE(%s,''), COALESCE(%s,''), COALESCE(%s,'') FROM %s WHERE %s ORDER BY ts DESC LIMIT %d OFFSET %d",
-		spec.nameExpr, spec.levelExpr, spec.messageExpr, spec.table, strings.Join(where, " AND "), limit+1, offset,
+		"SELECT ts, COALESCE(%s,''), COALESCE(%s,''), COALESCE(%s,''), %s FROM %s WHERE %s ORDER BY ts DESC LIMIT %d OFFSET %d",
+		spec.nameExpr, spec.levelExpr, spec.messageExpr, detailSelect(spec.detail), spec.table,
+		strings.Join(where, " AND "), limit+1, offset,
 	)
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -145,14 +199,19 @@ func (s *Service) Query(ctx context.Context, q Query) (Result, error) {
 	defer func() { _ = rows.Close() }()
 
 	entries := make([]Entry, 0, limit)
+	var (
+		rawTS   []byte
+		name    string
+		level   string
+		message string
+		detail  [detailColumnCount]string
+	)
+	dest := []any{&rawTS, &name, &level, &message}
+	for i := range detail {
+		dest = append(dest, &detail[i])
+	}
 	for rows.Next() {
-		var (
-			rawTS   []byte
-			name    string
-			level   string
-			message string
-		)
-		if err := rows.Scan(&rawTS, &name, &level, &message); err != nil {
+		if err := rows.Scan(dest...); err != nil {
 			return Result{}, err
 		}
 		ts, ok := parseDBTime(string(rawTS))
@@ -164,17 +223,42 @@ func (s *Service) Query(ctx context.Context, q Query) (Result, error) {
 			return Result{Entries: entries, HasMore: true, Source: string(q.Source), Limit: limit, Offset: offset}, nil
 		}
 		entries = append(entries, Entry{
-			TS:      ts.UTC(),
-			Source:  string(q.Source),
-			Name:    name,
-			Level:   normalizeLevel(string(q.Source), level),
-			Message: message,
+			TS:        ts.UTC(),
+			Source:    string(q.Source),
+			Name:      name,
+			Level:     normalizeLevel(string(q.Source), level),
+			Message:   message,
+			Host:      detail[detailHost],
+			Unit:      detail[detailUnit],
+			Container: detail[detailContainer],
+			FilePath:  detail[detailFilePath],
+			Process:   detail[detailProcess],
+			PID:       detail[detailPID],
+			Method:    detail[detailMethod],
+			Path:      detail[detailPath],
+			Status:    detail[detailStatus],
+			Duration:  detail[detailDuration],
+			ClientIP:  detail[detailClientIP],
 		})
 	}
 	if err := rows.Err(); err != nil {
 		return Result{}, err
 	}
 	return Result{Entries: entries, HasMore: false, Source: string(q.Source), Limit: limit, Offset: offset}, nil
+}
+
+// detailSelect 把各表的详情列拼成固定 11 列；没有的列输出空串，
+// 保证所有来源都能用同一段 Scan 代码，新增来源时只填需要的下标。
+func detailSelect(cols [detailColumnCount]string) string {
+	parts := make([]string, detailColumnCount)
+	for i, c := range cols {
+		if c == "" {
+			parts[i] = "''"
+			continue
+		}
+		parts[i] = "COALESCE(CAST(" + c + " AS CHAR),'')"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // normalizeLevel 把各表的 level 列统一成可读文本：

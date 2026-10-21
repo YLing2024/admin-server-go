@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"admin-server-go/internal/alerts"
 	"admin-server-go/internal/anomaly"
 	"admin-server-go/internal/apps"
 	"admin-server-go/internal/config"
@@ -120,6 +121,21 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		}
 	}
 
+	// 告警规则引擎：每分钟判定一次，触发时写 alert_events 并推 ntfy。
+	var alertsSvc *alerts.Service
+	if metricsDB != nil {
+		notifier := alerts.NewNtfyFromFile("https://ntfy.zhangyunling.cn", "server", "/data/ntfy/alert-token.txt")
+		alertsSvc = alerts.New(alerts.Options{
+			DB:       metricsDB.SQL,
+			Metrics:  probeSvc,
+			Notifier: notifier,
+			Log:      logger,
+			Interval: time.Minute,
+		})
+		go alertsSvc.Start(ctx)
+		go seedAlertRules(ctx, metricsDB.SQL, logger)
+	}
+
 	metricsSvc := metrics.New(metrics.Options{Cfg: cfg, DB: metricsDB, Log: logger, Probe: probeSvc})
 	appsSvc := apps.New(apps.Options{Cfg: cfg, Log: logger, Probe: probeSvc})
 	sshKeysSvc := sshkeys.New(sshkeys.Options{Cfg: cfg, DB: metricsDB, Log: logger})
@@ -138,6 +154,7 @@ func serve(cfg *config.Config, logger *slog.Logger) error {
 		Tools:   toolsSvc,
 		Logs:    logsSvc,
 		Anomaly: anomalySvc,
+		Alerts:  alertsSvc,
 	})
 
 	server := &http.Server{
@@ -245,5 +262,44 @@ func runAnomalyLoop(ctx context.Context, probeSvc *probe.Service, svc *anomaly.S
 				}
 			}
 		}
+	}
+}
+
+// seedAlertRules 在规则表为空时写入几条默认规则，避免"装了但一条规则都没有"。
+func seedAlertRules(ctx context.Context, db *sql.DB, logger *slog.Logger) {
+	var n int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM alert_rules").Scan(&n); err != nil {
+		if logger != nil {
+			logger.Warn("读取告警规则数失败", "error", err)
+		}
+		return
+	}
+	if n > 0 {
+		return
+	}
+	defaults := []struct {
+		name, metric, op string
+		threshold        float64
+		duration, cool   int
+		severity         string
+	}{
+		{"CPU 持续过高", "cpu_percent", "gt", 90, 300, 1800, "warn"},
+		{"内存持续过高", "mem_percent", "gt", 92, 300, 1800, "warn"},
+		{"根分区将满", "disk_percent", "gt", 90, 60, 3600, "crit"},
+		{"系统明显卡顿", "stall_score", "gt", 50, 120, 1800, "warn"},
+	}
+	for _, r := range defaults {
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO alert_rules (name, metric, op, threshold, duration_sec, severity, enabled, cooldown_sec)
+			 VALUES (?,?,?,?,?,?,1,?)`,
+			r.name, r.metric, r.op, r.threshold, r.duration, r.severity, r.cool); err != nil {
+			if logger != nil {
+				logger.Warn("写入默认告警规则失败", "rule", r.name, "error", err)
+			}
+			return
+		}
+	}
+	if logger != nil {
+		logger.Info("已写入默认告警规则", "count", len(defaults))
 	}
 }

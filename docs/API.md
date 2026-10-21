@@ -907,3 +907,25 @@
 ```
 
 - 未启用检测时返回 `{"items": []}`
+
+### GET /api/admin/alerts/rules
+
+- 鉴权：`authRequired`；返回全部规则 `{"items":[{id,name,metric,op,threshold,durationSec,severity,enabled,cooldownSec}]}`
+
+### POST /api/admin/alerts/rules
+
+- 鉴权：`authRequired`；body `{"name","metric","op","threshold","durationSec","severity","cooldownSec"}`；返回创建的规则
+- metric 取值：`cpu_percent` / `mem_percent` / `disk_percent` / `stall_score` / `run_queue` / `psi_cpu` / `psi_io` / `psi_mem`；op 取值：`gt` / `gte` / `lt` / `lte`
+
+### PATCH /api/admin/alerts/rules/:id
+
+- 鉴权：`authRequired`；body `{"enabled": true|false}`；返回 `{"ok":true}`
+
+### DELETE /api/admin/alerts/rules/:id
+
+- 鉴权：`authRequired`；返回 `{"ok":true}`
+
+### GET /api/admin/alerts/events
+
+- 鉴权：`authRequired`；参数 `limit`（默认 100）；返回 `{"items":[{ruleName,severity,value,threshold,startedAt,endedAt,notified}]}`
+- 判定每分钟一次，连续满足 `durationSec` 才触发，`cooldownSec` 内不重复推送

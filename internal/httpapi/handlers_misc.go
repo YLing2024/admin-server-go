@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"admin-server-go/internal/alerts"
 	"admin-server-go/internal/auth"
 	"admin-server-go/internal/httpx"
 	"admin-server-go/internal/logs"
@@ -304,4 +305,114 @@ func (s *Server) handleAnomalies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// ---- 告警规则 ----
+
+// handleAlertRules 列出全部规则。
+func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		return
+	}
+	items, err := s.alerts.ListRules(r.Context())
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "读取告警规则失败")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// handleAlertRuleCreate 新建规则。
+func (s *Server) handleAlertRuleCreate(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		httpx.Error(w, http.StatusNotImplemented, "告警未启用")
+		return
+	}
+	body := httpx.Body(r)
+	rule := alerts.Rule{
+		Name:        strings.TrimSpace(httpx.BodyString(body, "name")),
+		Metric:      strings.TrimSpace(httpx.BodyString(body, "metric")),
+		Op:          strings.TrimSpace(httpx.BodyString(body, "op")),
+		Severity:    strings.TrimSpace(httpx.BodyString(body, "severity")),
+		Threshold:   atofDefault(httpx.BodyString(body, "threshold"), 0),
+		DurationSec: atoiDefault(httpx.BodyString(body, "durationSec"), 60),
+		CooldownSec: atoiDefault(httpx.BodyString(body, "cooldownSec"), 900),
+		Enabled:     true,
+	}
+	if rule.Name == "" || rule.Metric == "" || rule.Op == "" {
+		httpx.Error(w, http.StatusBadRequest, "name / metric / op 必填")
+		return
+	}
+	if rule.Severity == "" {
+		rule.Severity = "warn"
+	}
+	created, err := s.alerts.CreateRule(r.Context(), rule)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "创建规则失败: "+err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, created)
+}
+
+// handleAlertRuleUpdate 目前只支持启停。
+func (s *Server) handleAlertRuleUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		httpx.Error(w, http.StatusNotImplemented, "告警未启用")
+		return
+	}
+	id, err := strconv.ParseInt(httpx.Param(r, "id"), 10, 64)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "id 非法")
+		return
+	}
+	body := httpx.Body(r)
+	enabled := httpx.BodyString(body, "enabled")
+	on := enabled == "1" || strings.EqualFold(enabled, "true")
+	if err := s.alerts.ToggleRule(r.Context(), id, on); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "更新规则失败")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleAlertRuleDelete 删除规则。
+func (s *Server) handleAlertRuleDelete(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		httpx.Error(w, http.StatusNotImplemented, "告警未启用")
+		return
+	}
+	id, err := strconv.ParseInt(httpx.Param(r, "id"), 10, 64)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "id 非法")
+		return
+	}
+	if err := s.alerts.DeleteRule(r.Context(), id); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "删除规则失败")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleAlertEvents 返回最近触发事件。
+func (s *Server) handleAlertEvents(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		return
+	}
+	items, err := s.alerts.ListEvents(r.Context(), atoiDefault(r.URL.Query().Get("limit"), 100))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "读取告警事件失败")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// atofDefault 解析浮点，失败返回默认值。
+func atofDefault(raw string, def float64) float64 {
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return def
+	}
+	return v
 }

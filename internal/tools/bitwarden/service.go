@@ -73,6 +73,8 @@ type Tool struct {
 	Configured bool   `json:"configured"`
 	Unlocked   bool   `json:"unlocked"`
 	ExpiresAt  *int64 `json:"expiresAt"`
+	// URL 非空表示这是一个「外链工具」：点开直接跳转，没有服务端表单。
+	URL string `json:"url,omitempty"`
 }
 
 // Status 是 GET /api/admin/tools/bitwarden/status 的响应。
@@ -124,16 +126,26 @@ func (s *Service) configured() bool {
 		s.cfg.BitwardenDeviceID != ""
 }
 
-// List 处理 GET /api/admin/tools：目前只有 Bitwarden 一项，数组形状便于后续追加工具。
+// List 处理 GET /api/admin/tools：Bitwarden 解锁 + 私密信箱（外链工具）。
+// 数组形状便于后续继续追加。
 func (s *Service) List(w http.ResponseWriter, _ *http.Request) {
 	state := s.readSession()
-	httpx.WriteJSON(w, http.StatusOK, []Tool{{
-		ID:         "bitwarden",
-		Name:       name,
-		Configured: s.configured(),
-		Unlocked:   s.configured() && state.unlocked,
-		ExpiresAt:  state.expiresAt,
-	}})
+	httpx.WriteJSON(w, http.StatusOK, []Tool{
+		{
+			ID:         "bitwarden",
+			Name:       name,
+			Configured: s.configured(),
+			Unlocked:   s.configured() && state.unlocked,
+			ExpiresAt:  state.expiresAt,
+		},
+		{
+			ID:         "inbox",
+			Name:       "私密信箱",
+			Configured: true,
+			Unlocked:   true,
+			URL:        "https://drop.zhangyunling.cn/pair",
+		},
+	})
 }
 
 // Status 处理 GET /api/admin/tools/bitwarden/status：只回布尔与时间，绝不回 token。

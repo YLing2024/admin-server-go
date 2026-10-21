@@ -38,16 +38,16 @@ type Rule struct {
 
 // Event 是一次触发记录。
 type Event struct {
-	ID         int64      `json:"id"`
-	RuleID     int64      `json:"ruleId"`
-	RuleName   string     `json:"ruleName"`
-	Metric     string     `json:"metric"`
-	Severity   string     `json:"severity"`
-	Value      float64    `json:"value"`
-	Threshold  float64    `json:"threshold"`
-	StartedAt  time.Time  `json:"startedAt"`
-	EndedAt    *time.Time `json:"endedAt,omitempty"`
-	Notified   bool       `json:"notified"`
+	ID        int64      `json:"id"`
+	RuleID    int64      `json:"ruleId"`
+	RuleName  string     `json:"ruleName"`
+	Metric    string     `json:"metric"`
+	Severity  string     `json:"severity"`
+	Value     float64    `json:"value"`
+	Threshold float64    `json:"threshold"`
+	StartedAt time.Time  `json:"startedAt"`
+	EndedAt   *time.Time `json:"endedAt,omitempty"`
+	Notified  bool       `json:"notified"`
 }
 
 // MetricProvider 由 probe 实现：按指标名取当前值。
@@ -138,8 +138,13 @@ func (s *Service) Reload(ctx context.Context) error {
 	var list []Rule
 	for rows.Next() {
 		var r Rule
-		if err := rows.Scan(&r.ID, &r.Name, &r.Metric, &r.Op, &r.Threshold, &r.DurationSec, &r.Severity, &r.Enabled, &r.CooldownSec, &r.CreatedAt); err != nil {
+		var createdAt []byte
+		if err := rows.Scan(&r.ID, &r.Name, &r.Metric, &r.Op, &r.Threshold, &r.DurationSec, &r.Severity, &r.Enabled, &r.CooldownSec, &createdAt); err != nil {
 			return err
+		}
+		// 驱动未开 parseTime，DATETIME 以 []byte 返回；解析失败按零值处理，不影响规则生效
+		if t, ok := parseMySQLTime(string(createdAt)); ok {
+			r.CreatedAt = t
 		}
 		list = append(list, r)
 	}
@@ -438,4 +443,18 @@ func atoiSafe(s string) int {
 		return 1
 	}
 	return 3
+}
+
+// parseMySQLTime 解析 MySQL DATETIME(3) 文本（UTC 语义）。
+func parseMySQLTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(strings.Trim(raw, "\x00"))
+	if raw == "" {
+		return time.Time{}, false
+	}
+	for _, l := range []string{"2006-01-02 15:04:05.999999", "2006-01-02 15:04:05"} {
+		if t, err := time.ParseInLocation(l, raw, time.UTC); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }

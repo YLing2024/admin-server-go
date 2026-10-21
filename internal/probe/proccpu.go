@@ -13,7 +13,12 @@ func procCPUInfo(pid int) (procCPUState, bool) {
 	if err != nil {
 		return procCPUState{}, false
 	}
-	s := string(data)
+	return parseProcStat(string(data))
+}
+
+// parseProcStat 是 procCPUInfo 的纯解析部分，同时识别僵尸进程。
+// 僵尸计数复用采样器本来就要遍历的进程表，不额外扫一遍 /proc。
+func parseProcStat(s string) (procCPUState, bool) {
 	openIdx := strings.IndexByte(s, '(')
 	closeIdx := strings.LastIndexByte(s, ')')
 	if openIdx == -1 || closeIdx <= openIdx {
@@ -25,8 +30,9 @@ func procCPUInfo(pid int) (procCPUState, bool) {
 		return procCPUState{}, false
 	}
 	return procCPUState{
-		ticks: atof(rest[11]) + atof(rest[12]),
-		name:  s[openIdx+1 : closeIdx],
+		ticks:  atof(rest[11]) + atof(rest[12]),
+		name:   s[openIdx+1 : closeIdx],
+		zombie: rest[0] == "Z",
 	}, true
 }
 

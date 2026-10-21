@@ -49,6 +49,13 @@ type Service struct {
 	cgMu     sync.Mutex
 	cgPrev   map[string]cgroupUsage
 	cgPrevAt time.Time
+
+	// extraMu 保护监控补全指标的最近快照与磁盘差分基线。与 CPU / 速率分开加锁，
+	// 让 HTTP 读方不会因为 /proc/net/tcp 这类文件读取而阻塞。
+	extraMu     sync.RWMutex
+	extraSnap   extraSnapshot
+	extraPrev   map[string]diskRaw
+	extraPrevAt time.Time
 }
 
 // coreTicks 是单个核的累计时钟滴答（内核口径）。

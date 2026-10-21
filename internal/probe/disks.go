@@ -30,7 +30,7 @@ func getDisks() []map[string]any {
 		if mount == "/boot" || mount == "/boot/efi" {
 			continue
 		}
-		disks = append(disks, map[string]any{
+		d := map[string]any{
 			"filesystem": filesystem,
 			"mount":      mount,
 			"device":     baseDevice(filesystem),
@@ -38,9 +38,28 @@ func getDisks() []map[string]any {
 			"used":       atoi(cols[2]) * 1024,
 			"free":       atoi(cols[3]) * 1024,
 			"percent":    int(atoi(strings.TrimSuffix(cols[4], "%"))),
-		})
+		}
+		// inode 计数只能从 statfs 拿；伪文件系统已在上面的 device 过滤里排除。
+		if inodePercent, inodeTotal, ok := statfsInodes(mount); ok {
+			d["inode_percent"] = inodePercent
+			d["inode_total"] = inodeTotal
+		}
+		disks = append(disks, d)
 	}
 	return disks
+}
+
+// statfsInodes 返回挂载点的 inode 使用率（%）与总数；statfs 失败或文件系统不报 inode 时 ok=false。
+func statfsInodes(mount string) (percent float64, total int64, ok bool) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(mount, &st); err != nil || st.Files == 0 {
+		return 0, 0, false
+	}
+	used := int64(st.Files - st.Ffree)
+	if used < 0 {
+		used = 0
+	}
+	return round1(float64(used) / float64(st.Files) * 100), int64(st.Files), true
 }
 
 // baseDevice 把挂载点的 filesystem 归一到基础设备名（与 /proc/diskstats 的设备名对齐）：

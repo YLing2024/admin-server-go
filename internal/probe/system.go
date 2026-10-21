@@ -174,8 +174,10 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 	}
 	// 速率只读后台快照（唯一来源）；累计字节与速率同源，避免同一响应内两个时刻混用。
 	rates := s.currentRateSnapshot()
+	extra := s.currentExtraSnapshot()
 	disks := getDisks()
 	applyDiskRates(disks, rates)
+	applyDiskLatency(disks, extra)
 	psi := snap.psi
 	if psi == nil {
 		psi = emptyPressure()
@@ -184,7 +186,25 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 	if services == nil {
 		services = []serviceCPU{}
 	}
-	return map[string]any{
+	proc := getProcesses()
+	proc["zombie"] = snap.zombie
+	netInfo := networkInfo(rates)
+	if extra.netOK {
+		netInfo["rx_drops"] = extra.netErrors.RxDrops
+		netInfo["rx_errors"] = extra.netErrors.RxErrors
+		netInfo["tx_drops"] = extra.netErrors.TxDrops
+		netInfo["tx_errors"] = extra.netErrors.TxErrors
+	}
+	if extra.tcp != nil {
+		netInfo["tcp"] = map[string]any{
+			"established": extra.tcp.Established,
+			"time_wait":   extra.tcp.TimeWait,
+			"close_wait":  extra.tcp.CloseWait,
+			"listen":      extra.tcp.Listen,
+			"total":       extra.tcp.Total,
+		}
+	}
+	payload := map[string]any{
 		"cpu": s.getCPUInfo(),
 		"memory": map[string]any{
 			"total":       mem.Total,
@@ -201,9 +221,9 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 		},
 		"disk":         getDisk(),
 		"disks":        disks,
-		"network":      networkInfo(rates),
+		"network":      netInfo,
 		"disk_io":      diskIoInfo(rates),
-		"processes":    getProcesses(),
+		"processes":    proc,
 		"psi":          psi,
 		"top_services": services,
 		"stall_score":  snap.stallScore,
@@ -212,7 +232,22 @@ func (s *Service) CollectSystem() (map[string]any, error) {
 		"os":           osType() + " " + osRelease() + " (" + nodeArch() + ")",
 		"hostname":     hostname(),
 		"containers":   s.containerList(),
-	}, nil
+	}
+	if extra.uptimeOK || extra.fileHandles != nil {
+		system := map[string]any{}
+		if extra.uptimeOK {
+			system["uptime_sec"] = round1(extra.uptimeSec)
+		}
+		if extra.fileHandles != nil {
+			system["file_handles"] = map[string]any{
+				"used":    extra.fileHandles.Used,
+				"max":     extra.fileHandles.Max,
+				"percent": extra.fileHandles.Percent,
+			}
+		}
+		payload["system"] = system
+	}
+	return payload, nil
 }
 
 /* ============ 网络 / 磁盘 I/O 速率（只读快照） ============ */
@@ -248,6 +283,22 @@ func applyDiskRates(disks []map[string]any, snap rateSnapshot) {
 		d["write_rate"] = rate.WriteBytes
 		d["read_bytes"] = bytes.ReadBytes
 		d["write_bytes"] = bytes.WriteBytes
+	}
+}
+
+// applyDiskLatency 把补充快照里的按盘 IOPS / await 写进 disks[]。
+// 快照尚未产出（diskOK=false）时不写这些 key，前端按缺省显示破折号；
+// 已产出但某设备本轮没有差分（首次采样）时写 0，不伪造历史值。
+func applyDiskLatency(disks []map[string]any, snap extraSnapshot) {
+	if !snap.diskOK {
+		return
+	}
+	for _, d := range disks {
+		dev, _ := d["device"].(string)
+		lat := snap.diskLatency[dev]
+		d["read_iops"] = lat.ReadIOPS
+		d["write_iops"] = lat.WriteIOPS
+		d["await_ms"] = lat.AwaitMS
 	}
 }
 

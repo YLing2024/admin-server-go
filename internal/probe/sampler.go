@@ -24,8 +24,9 @@ type coreUsage struct {
 // procCPUState 是单个进程的累计 CPU 滴答与进程名。保留进程名是为了让已退出进程
 // 仍能在窗口归因里被认出（/proc 已读不到，只能依赖采样历史）。
 type procCPUState struct {
-	ticks float64
-	name  string
+	ticks  float64
+	name   string
+	zombie bool
 }
 
 // cpuState 是某一时刻的 /proc/stat 与全部进程累计滴答快照。
@@ -37,6 +38,7 @@ type cpuState struct {
 	proc     map[int]procCPUState
 	runQueue int
 	blocked  int
+	zombies  int
 }
 
 // cpuWindow 是同一对快照算出的系统、每核与进程占用。
@@ -47,6 +49,7 @@ type cpuWindow struct {
 	proc     map[int]float64
 	runQueue int
 	blocked  int
+	zombies  int
 }
 
 // hostSnapshot 是后台采样器发布的只读快照：CPU / 内存 / 负载 / PSI / 窗口归因
@@ -59,6 +62,7 @@ type hostSnapshot struct {
 	usage60s    float64
 	runQueue    int
 	blocked     int
+	zombie      int
 	perCore     []coreUsage
 	procCPU     map[int]float64
 	movers      []cpuMover
@@ -147,12 +151,18 @@ func (s *Service) windowSamples(seconds int) int {
 	return n
 }
 
-// sampleAll 执行一个完整 tick。速率、主机指标与 cgroup 服务占用共用同一时钟节奏；
+// sampleAll 执行一个完整 tick。速率、主机指标、补充指标与 cgroup 服务占用共用同一时钟节奏；
 // 单次采集超过 200ms 说明遍历开销异常，记 warn 但不影响本轮结果。
 func (s *Service) sampleAll() {
 	start := time.Now()
 	s.sampleRates()
 	s.sampleHost()
+	extraStart := time.Now()
+	s.sampleExtras()
+	if elapsed := time.Since(extraStart); elapsed > 5*time.Millisecond {
+		// 需求书要求新增采集 < 5ms；超了不丢帧，只留证据便于定位慢文件。
+		s.log.Warn("补充指标采集耗时超过 5ms", "elapsed", elapsed.String())
+	}
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
 		s.log.Warn("系统采样单次耗时超过 200ms", "elapsed", elapsed.String())
 	}
@@ -208,6 +218,7 @@ func (s *Service) sampleHost() {
 	s.sampleSnap.cpuPercent = win.total
 	s.sampleSnap.runQueue = win.runQueue
 	s.sampleSnap.blocked = win.blocked
+	s.sampleSnap.zombie = win.zombies
 	s.sampleSnap.perCore = win.perCore
 	s.sampleSnap.procCPU = win.proc
 
@@ -258,7 +269,13 @@ func readCPUState() (cpuState, error) {
 	if err != nil {
 		return cpuState{}, fmt.Errorf("读取 /proc 进程列表失败: %w", err)
 	}
-	return cpuState{at: at, agg: agg, cores: cores, proc: proc, runQueue: runQueue, blocked: blocked}, nil
+	zombies := 0
+	for _, info := range proc {
+		if info.zombie {
+			zombies++
+		}
+	}
+	return cpuState{at: at, agg: agg, cores: cores, proc: proc, runQueue: runQueue, blocked: blocked, zombies: zombies}, nil
 }
 
 // parseProcQueue 解析 /proc/stat 的 procs_running / procs_blocked。
@@ -428,7 +445,7 @@ func diffCPUState(prev, cur cpuState) (cpuWindow, bool) {
 
 	return cpuWindow{
 		window: window, total: total, perCore: perCore, proc: proc,
-		runQueue: cur.runQueue, blocked: cur.blocked,
+		runQueue: cur.runQueue, blocked: cur.blocked, zombies: cur.zombies,
 	}, true
 }
 

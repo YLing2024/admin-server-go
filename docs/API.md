@@ -118,16 +118,20 @@
   "disk": { "mount": "/", "used": 120, "total": 500, "free": 380, "percent": 24 },
   "disks": [
     { "filesystem": "/dev/vda1", "mount": "/", "device": "vda", "percent": 24,
-      "total": 500, "used": 120, "free": 380,
-      "read_rate": 0, "write_rate": 0, "read_bytes": 0, "write_bytes": 0 }
+      "total": 500, "used": 120, "free": 380, "inode_percent": 19.5,
+      "read_rate": 0, "write_rate": 0, "read_iops": 0, "write_iops": 31, "await_ms": 0.4,
+      "read_bytes": 0, "write_bytes": 0 }
   ],
-  "network": { "rx_rate": 1024, "tx_rate": 512, "rx_bytes": 0, "tx_bytes": 0 },
+  "network": { "rx_rate": 1024, "tx_rate": 512, "rx_bytes": 0, "tx_bytes": 0,
+               "rx_drops": 0, "rx_errors": 0, "tx_drops": 75, "tx_errors": 0,
+               "tcp": { "established": 79, "time_wait": 19, "close_wait": 0, "listen": 64, "total": 162 } },
   "disk_io": { "read_rate": 0, "write_rate": 0, "read_bytes": 0, "write_bytes": 0 },
-  "processes": { "running": 1, "total": 344 },
+  "processes": { "running": 1, "total": 344, "zombie": 0 },
   "psi": { "memory": { "some": { "avg10": 0 } }, "cpu": { "some": { "avg10": 1 } }, "io": { "some": { "avg10": 0 } } },
   "top_services": [{ "unit": "hermes-gateway.service", "cpu_percent": 12.3, "mem_mb": 550 }],
   "stall_score": 6.2,
   "stall_level": "顺畅",
+  "system": { "uptime_sec": 123456.7, "file_handles": { "used": 3904, "max": 9223372036854775807, "percent": 0 } },
   "uptime": 123456, "os": "Linux …", "hostname": "…"
 }
 ```
@@ -136,6 +140,12 @@
 - `cpu.load_percent`：`load1 ÷ 逻辑核数 × 100`（一位小数）；`loadavg` 仍为 `/proc/loadavg` 原始 1/5/15 分钟负载。
 - `cpu.usage_15s` / `cpu.usage_60s`：同一采样 tick 序列的 15 秒 / 60 秒均值（固定长度环形缓冲，容量按 `PROBE_INTERVAL_SEC` 换算），启动初期返回已积累样本的均值；`usage_percent` 仍只表示最近一个 tick。
 - `cpu.run_queue` / `cpu.blocked`：取自同一个 `/proc/stat` 的 `procs_running` / `procs_blocked`。`run_queue > cores` 表示已在排队；`blocked > 0` 表示有进程卡在 IO。
+- `cpu.per_core`：同一窗口内 `cpuN` 行的差分，按核编号升序，最多 8 条（`id` + `usage_percent`，0–100）。核数超过 8 时 `cores` 仍报真实核数。
+- `processes.zombie`：复用采样器遍历 `/proc/<pid>/stat` 的结果统计 `state=Z` 的进程数；与 `cpu.blocked`（`procs_blocked`）同属一个 tick，不是两次独立扫描。
+- `system.uptime_sec`：`/proc/uptime` 第一列，秒（一位小数）。顶层 `uptime` 为兼容旧前端保留，语义相同、精度为整数。
+- `system.file_handles`：`/proc/sys/fs/file-nr` 的 `{ used, max, percent }`。`used` 取「已分配 − 未使用」，`percent` 为一位小数；文件不可读时整个 `system` 块省略。
+- `network.rx_drops` / `rx_errors` / `tx_drops` / `tx_errors`：`/proc/net/dev` 第 4/5/11/12 列，全部接口累计值之和（含 `lo`）。
+- `network.tcp`：`/proc/net/tcp` 与 `/proc/net/tcp6` 按状态码聚合的 `established` / `time_wait` / `close_wait` / `listen` / `total`；`total` 含全部状态（如 SYN_SENT / FIN_WAIT）。IPv6 文件不存在时只统计 IPv4。
 - `cpu.top_movers`：最近 15 秒 `Δ(utime+stime)` 最大的 5 个进程（按进程 CPU 同一整机口径换算为 `delta_percent`）。窗口内出现后又退出的进程仍保留在榜内并标 `"exited": true`，其 `current_percent` 为 0；`current_percent` 为最近一个 tick 的进程占用。
 - `top_services`：`system.slice` 下各 `*.service` 的 cgroup v2 `cpu.stat` 中 `usage_usec` 两 tick 做差得到的 CPU 占比，最多 10 个。`cpu_percent` 按整机可用 CPU 时间归一（与进程 CPU 同口径，单核满载约 `100 ÷ 核数`）；`mem_mb` 读 `memory.current`，读不到为 `null`。
 - `stall_score` / `stall_level`：由同一 tick 的 PSI（`some.avg60`）与运行队列合成的 0–100 卡顿指数：
@@ -161,8 +171,18 @@
   | `device` | string | 基础设备名（与 `/proc/diskstats` 对齐）：`/dev/vda1`→`vda`、`/dev/nvme0n1p1`→`nvme0n1`、`/dev/mapper/x`→`x`；无法映射为 `""` |
   | `total` / `used` / `free` | number | 字节（`df -kP` × 1024） |
   | `percent` | number | 使用百分比（整数） |
+  | `inode_percent` | number | inode 使用率（%，一位小数；`statfs` 读不到时省略） |
+  | `read_iops` / `write_iops` | number | 该设备每秒读 / 写完成次数（1 秒窗口，一位小数；首次采样为 0） |
+  | `await_ms` | number | 该设备平均 await（毫秒，`(读耗时+写耗时)÷完成次数`；首次采样为 0） |
   | `read_rate` / `write_rate` | number | 该设备读写速率（字节/秒；首次采样为 0） |
   | `read_bytes` / `write_bytes` | number | 该设备累计读写字节 |
+
+- `disks[].inode_percent` 来自 `statfs` 的 `Files/Ffree`（与 `/api/admin/system/info` 的 `inode_percent` 同口径）；
+  IOPS / await 来自 `/proc/diskstats` 两次 tick 的差分，分区不计。
+- 采集失败只让对应字段缺省：`system` 整块省略、`network.tcp` / 丢包字段省略、`disks[]` 的 IOPS/await 省略，
+  不会让整帧 SSE 失败。
+- 新增采集耗时：`internal/probe/extras_test.go` 的 `TestCollectExtrasUnder5ms` 连续 200 轮读取上述全部来源，
+  以平均值 < 5ms 作门禁（实测约 4.2ms）；单轮最大值受宿主机调度影响，仅打印不参与门禁。
 
 - 速率口径：`disk_io`（全部整盘合计）、`disks[].read_rate/write_rate`、`network` 的速率**同源于唯一的 1s 后台采样快照**，
   不随请求次数重置（多客户端 / 多标签 / SSE 并发读到的是一致的数值）；快照尚未产出时速率一律 `0`。磁盘累计字节按设备名判定整盘，分区（`vda1`、`nvme0n1p1`）不计入。

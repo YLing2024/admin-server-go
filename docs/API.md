@@ -182,7 +182,7 @@
 - 采集失败只让对应字段缺省：`system` 整块省略、`network.tcp` / 丢包字段省略、`disks[]` 的 IOPS/await 省略，
   不会让整帧 SSE 失败。
 - 新增采集耗时：`internal/probe/extras_test.go` 的 `TestCollectExtrasUnder5ms` 连续 200 轮读取上述全部来源，
-  以平均值 < 5ms 作门禁（实测约 4.2ms）；单轮最大值受宿主机调度影响，仅打印不参与门禁。
+  以平均值 < 5ms 作门禁（实测约 2.8ms）；单轮最大值受宿主机调度影响，仅打印不参与门禁。
 
 - 速率口径：`disk_io`（全部整盘合计）、`disks[].read_rate/write_rate`、`network` 的速率**同源于唯一的 1s 后台采样快照**，
   不随请求次数重置（多客户端 / 多标签 / SSE 并发读到的是一致的数值）；快照尚未产出时速率一律 `0`。磁盘累计字节按设备名判定整盘，分区（`vda1`、`nvme0n1p1`）不计入。

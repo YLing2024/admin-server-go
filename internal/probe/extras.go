@@ -172,22 +172,39 @@ func parseFileHandles(content string) *fileHandleStat {
 }
 
 // readTCPStateCounts 汇总 IPv4 与 IPv6 的 TCP 状态。任一文件可读即视为成功，
-// 容器里没有 IPv6 时只统计 IPv4。
+// 容器里没有 IPv6 时只统计 IPv4。两份 seq_file 并行读：内核逐连接遍历时互不依赖，
+// 串行读会让 1 秒采样窗口多付一次约 1ms 的文件生成开销。
 func readTCPStateCounts() *tcpStateCount {
+	paths := []string{"/proc/net/tcp", "/proc/net/tcp6"}
+	type result struct {
+		counts tcpStateCount
+		ok     bool
+	}
+	results := make(chan result, len(paths))
+	for _, path := range paths {
+		go func(path string) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				results <- result{}
+				return
+			}
+			counts, _ := parseTCPStates(string(data))
+			results <- result{counts: counts, ok: true}
+		}(path)
+	}
 	total := tcpStateCount{}
 	ok := false
-	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		data, err := os.ReadFile(path)
-		if err != nil {
+	for range paths {
+		r := <-results
+		if !r.ok {
 			continue
 		}
 		ok = true
-		counts, _ := parseTCPStates(string(data))
-		total.Established += counts.Established
-		total.TimeWait += counts.TimeWait
-		total.CloseWait += counts.CloseWait
-		total.Listen += counts.Listen
-		total.Total += counts.Total
+		total.Established += r.counts.Established
+		total.TimeWait += r.counts.TimeWait
+		total.CloseWait += r.counts.CloseWait
+		total.Listen += r.counts.Listen
+		total.Total += r.counts.Total
 	}
 	if !ok {
 		return nil

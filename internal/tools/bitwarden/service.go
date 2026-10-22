@@ -138,13 +138,6 @@ func (s *Service) List(w http.ResponseWriter, _ *http.Request) {
 			Unlocked:   s.configured() && state.unlocked,
 			ExpiresAt:  state.expiresAt,
 		},
-		{
-			ID:         "inbox",
-			Name:       "私密信箱",
-			Configured: true,
-			Unlocked:   true,
-			URL:        "https://drop.zhangyunling.cn/pair/883ac6c23e6f1492cb84a4fe85715ab03aefcd7dd3279b519c1556b8ef0afb87",
-		},
 	})
 }
 

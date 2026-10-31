@@ -23,6 +23,10 @@ type Service struct {
 	// containers 缓存 docker 采集结果：`docker stats` 单次数百毫秒，不能挂在每帧上。
 	containers containerCache
 
+	// rates 缓存「按进程的网速 / 磁盘速率」：5 秒一次 ss -tinp + 扫 /proc/<pid>/io，
+	// 两次采样做差得到速率（见 procrate.go）。
+	rates procRateState
+
 	// svcMu 保护服务探活的快照：SSE 每帧都要服务状态，若每帧都 fork ss / systemctl，
 	// 光是子进程就能吃掉接近一个核。端口表与 systemd 状态统一 5 秒刷新一次。
 	svcMu   sync.Mutex

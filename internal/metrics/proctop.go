@@ -45,6 +45,13 @@ type ProcNode struct {
 	SubtreeCount int     `json:"subtree_count"`
 	CgroupMemMB  *int    `json:"cgroup_mem_mb"`
 	ThreadCount  *int    `json:"thread_count"`
+	// 以下四项是 5 秒窗口内的平均速率（字节/秒），由 probe.ProcessRates 提供；
+	// 首帧没有基线时为 0（不是「没有流量」）。网速按套接字求和，只覆盖 TCP；
+	// 磁盘是 /proc/<pid>/io 的块设备字节（页缓存命中不计）。
+	NetRxBps     float64 `json:"net_rx_bps"`
+	NetTxBps     float64 `json:"net_tx_bps"`
+	DiskReadBps  float64 `json:"disk_read_bps"`
+	DiskWriteBps float64 `json:"disk_write_bps"`
 }
 
 // procPayload 是进程采集的完整载荷。
@@ -384,6 +391,9 @@ func (s *Service) collectProcesses() (*procPayload, error) {
 	// 3. 单次遍历 /proc 全部进程差分：perPid 与 totalPct 同源。
 	perPid, totalPct := s.probe.CollectAllProcCpu()
 
+	// 3b. 按进程的网速 / 磁盘速率（5 秒缓存，内部自行做差）。
+	procRates := s.probe.ProcessRates()
+
 	// 4. ps 全量（带 ppid，内存降序）。
 	var rows []ProcRow
 	parsedCount, skippedCount := 0, 0
@@ -461,14 +471,19 @@ func (s *Service) collectProcesses() (*procPayload, error) {
 		if _, ok := pidToService[r.PID]; ok {
 			cgroup = cgroupByPid[r.PID]
 		}
+		rate := procRates[r.PID]
 		nodes = append(nodes, ProcNode{
-			Name:        ResolveProcessName(r, pidToService, containerMap),
-			PID:         r.PID,
-			PPID:        r.PPID,
-			MemMB:       r.MemMB,
-			CPU:         cpu,
-			CgroupMemMB: cgroup,
-			ThreadCount: threadByPid[r.PID],
+			Name:         ResolveProcessName(r, pidToService, containerMap),
+			PID:          r.PID,
+			PPID:         r.PPID,
+			MemMB:        r.MemMB,
+			CPU:          cpu,
+			CgroupMemMB:  cgroup,
+			ThreadCount:  threadByPid[r.PID],
+			NetRxBps:     rate.Rx,
+			NetTxBps:     rate.Tx,
+			DiskReadBps:  rate.Read,
+			DiskWriteBps: rate.Write,
 		})
 	}
 

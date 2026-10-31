@@ -23,6 +23,13 @@ type Service struct {
 	// containers 缓存 docker 采集结果：`docker stats` 单次数百毫秒，不能挂在每帧上。
 	containers containerCache
 
+	// svcMu 保护服务探活的快照：SSE 每帧都要服务状态，若每帧都 fork ss / systemctl，
+	// 光是子进程就能吃掉接近一个核。端口表与 systemd 状态统一 5 秒刷新一次。
+	svcMu   sync.Mutex
+	svcAt   time.Time
+	svcPort map[int]int
+	svcSysd map[string]sysdEntry
+
 	// rateMu 保护「最近一次速率快照」与采样循环生命周期（见 rates.go）。快照是 REST 与 SSE
 	// 唯一的速率来源，由 StartSampler 起的唯一后台循环写入，读取方只读、不各自做差。
 	rateMu   sync.RWMutex

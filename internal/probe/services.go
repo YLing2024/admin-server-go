@@ -6,9 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -80,13 +78,19 @@ func (s *Service) checkService(svc serviceCheck) Status {
 		return Status{Name: svc.name, Status: "up", PID: &pid}
 	}
 	if svc.systemd {
-		if systemdIsActive(svc.name) {
-			return Status{Name: svc.name, Status: "up", PID: pidByProcessName(svc.name)}
+		st := s.systemdState(svc.name)
+		if st.active {
+			status := Status{Name: svc.name, Status: "up"}
+			if st.pid > 0 {
+				pid := st.pid
+				status.PID = &pid
+			}
+			return status
 		}
 		return Status{Name: svc.name, Status: "down"}
 	}
 	if s.CheckTCPPort(svc.port, 1500) {
-		return Status{Name: svc.name, Status: "up", PID: pidByPort(svc.port)}
+		return Status{Name: svc.name, Status: "up", PID: s.pidByPort(svc.port)}
 	}
 	return Status{Name: svc.name, Status: "down"}
 }
@@ -102,52 +106,70 @@ func (s *Service) CheckTCPPort(port int, timeoutMs int) bool {
 	return true
 }
 
-// systemdIsActive 执行 systemctl is-active；仅当 stdout 恰为 active 才算 up（非零退出码一律 down）。
-func systemdIsActive(name string) bool {
-	cmd := exec.Command("systemctl", "is-active", name+".service")
-	timer := time.AfterFunc(3*time.Second, func() { _ = cmd.Process.Kill() })
-	defer timer.Stop()
-	var stdout strings.Builder
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		return false
-	}
-	return strings.TrimSpace(stdout.String()) == "active"
+// svcSnapTTL 是服务探活快照的有效期。SSE 每秒一帧，5 秒足够新鲜，
+// 却把「每帧 5 次 ss + 2 次 systemctl + 1 次 pgrep」压成「每 5 秒 1 次 ss」。
+const svcSnapTTL = 5 * time.Second
+
+// sysdEntry 是某个 systemd 单元的探活结果。
+type sysdEntry struct {
+	active bool
+	pid    int
 }
 
-// pidByPort 通过 ss -ltnp 反查监听端口的进程 pid（不可用/失败返回 nil）。
-func pidByPort(port int) *int {
-	script := fmt.Sprintf("ss -ltnp 2>/dev/null | awk '$4 ~ /:%d$/ {print $6}' | head -1", port)
-	out, err := runShell(script, 3*time.Second)
-	if err != nil {
-		return nil
+// svcSnapshot 在锁内返回端口表与 systemd 状态；过期时只 fork 一次 `ss -ltnp`。
+func (s *Service) svcSnapshot() (map[int]int, map[string]sysdEntry) {
+	s.svcMu.Lock()
+	defer s.svcMu.Unlock()
+	if s.svcPort == nil {
+		s.svcPort = map[int]int{}
 	}
-	m := pidRe.FindStringSubmatch(out)
-	if m == nil {
-		return nil
+	if s.svcSysd == nil {
+		s.svcSysd = map[string]sysdEntry{}
 	}
-	pid := int(atoi(m[1]))
-	return &pid
+	if time.Since(s.svcAt) < svcSnapTTL {
+		return s.svcPort, s.svcSysd
+	}
+	out, err := runShell("ss -ltnp 2>/dev/null", 2*time.Second)
+	if err == nil {
+		s.svcPort = parseSSListen(out)
+		// 端口变了（服务重启后 pid 变化）就丢掉 systemd 缓存，下一轮重新问。
+		s.svcSysd = map[string]sysdEntry{}
+	}
+	s.svcAt = time.Now()
+	return s.svcPort, s.svcSysd
 }
 
-// pidByProcessName 按进程名反查 pid（systemd 服务用）。
-func pidByProcessName(name string) *int {
-	out, err := runShell(fmt.Sprintf(`pgrep -f "%s" | head -1`, name), 3*time.Second)
-	if err != nil {
-		return nil
+// pidByPort 从 5 秒快照里查端口对应的 pid；快照里没有就是 nil。
+func (s *Service) pidByPort(port int) *int {
+	ports, _ := s.svcSnapshot()
+	if pid, ok := ports[port]; ok && pid > 0 {
+		return &pid
 	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return nil
-	}
-	n, err := strconv.Atoi(strings.SplitN(out, "\n", 2)[0])
-	if err != nil {
-		return nil
-	}
-	return &n
+	return nil
 }
 
-var pidRe = regexp.MustCompile(`pid=(\d+)`)
+// systemdState 读单元状态：每个单元 5 秒内最多 fork 一次 systemctl show。
+func (s *Service) systemdState(name string) sysdEntry {
+	_, sysd := s.svcSnapshot()
+	s.svcMu.Lock()
+	entry, ok := sysd[name]
+	s.svcMu.Unlock()
+	if ok {
+		return entry
+	}
+
+	out, err := runShell(fmt.Sprintf("systemctl show -p ActiveState -p MainPID %s.service", name), 3*time.Second)
+	entry = sysdEntry{}
+	if err == nil {
+		if active, pid, ok := parseSystemctlShow(out); ok {
+			entry = sysdEntry{active: active, pid: pid}
+		}
+	}
+	s.svcMu.Lock()
+	s.svcSysd[name] = entry
+	s.svcMu.Unlock()
+	return entry
+}
 
 // runShell 用 sh -c 执行与旧实现完全相同的命令行文本，保证 `ss | awk | head` 这类管道的语义不变。
 func runShell(script string, timeout time.Duration) (string, error) {

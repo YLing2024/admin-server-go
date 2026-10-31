@@ -38,6 +38,8 @@ type containerCache struct {
 	at        time.Time
 	items     []ContainerStat
 	errStreak int
+	// prev 是 cgroup 路径算 CPU% 用的上一份记账（容器 id → usage_usec + 时间）。
+	prev ctPrevCache
 }
 
 // Containers 返回缓存的容器指标；缓存过期时同步刷新一次。
@@ -50,7 +52,14 @@ func (s *Service) Containers(ctx context.Context) ([]ContainerStat, error) {
 		return s.containers.items, nil
 	}
 
-	items, err := collectContainers(ctx)
+	// 首选 cgroup + API（几毫秒）；不可用时退回 docker CLI（数百毫秒到 1 秒）。
+	var items []ContainerStat
+	var err error
+	s.containers.ensureContainerPrev()
+	items, err = s.collectContainersCgroup(ctx, hostMemBytes())
+	if err != nil {
+		items, err = collectContainers(ctx)
+	}
 	s.containers.at = time.Now()
 	if err != nil {
 		s.containers.errStreak++

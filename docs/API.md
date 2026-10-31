@@ -218,6 +218,9 @@
       "total": 500000000000, "used": 230000000000, "free": 250000000000,
       "percent": 46, "inode_total": 3268608, "inode_used": 605694, "inode_percent": 18.5 }
   ],
+  "addresses": [
+    { "iface": "eth0", "ip": "203.0.113.10", "prefix": 24, "default": true, "role": "高防" }
+  ],
   "ports": {
     "total": 18,
     "items": [{ "port": 22, "protocol": "tcp", "state": "LISTEN", "process": "sshd", "pid": 812, "address": "0.0.0.0" }],
@@ -243,6 +246,7 @@
   | `memory` | object | 字节：`total`、`available`（`MemAvailable`）、`used`（`total − available`）、`cached`（`Buffers + Cached`） |
   | `swap` | object | 字节：`total` / `used`（`SwapTotal − SwapFree`） |
   | `disks` | array | `/proc/self/mounts` 中 device 以 `/dev/` 开头的真实块设备挂载点（**全部**挂载点，不截断），`syscall.Statfs` 读容量与 inode；跳过 `tmpfs` / `overlay` / `devtmpfs` / `squashfs` / `iso9660` / loop 设备与重复挂载点。`percent`、`inode_percent` 保留一位小数 |
+  | `addresses` | array | `net.Interfaces()` 枚举**公网 IPv4**（回环 / 私网 / 链路本地 / docker·br-·veth·tun 等虚拟网卡跳过，同地址去重）：`iface`、`ip`、`prefix`、`default`（默认路由源地址）、`role`（环境变量 `ADMIN_IP_ROLES`，形如 `ip=高防,ip=普通`，未配置时省略）。默认出口排在首位，其余按地址升序 |
   | `ports` | object | `ss -tulnp`：`total` 为全部 TCP/UDP 监听项数；`items` 默认返回全部（`?ports=15` 时只给前 15 条）。每项含 `port` / `protocol` / `state` / `process` / `pid` / `address` |
   | `systemd` | object | `systemctl --failed --no-legend --plain`：`failed[]` 含 `name` / `description` |
   | `logins` | object | `last -n 5 -w`：`items[]` 含 `user` / `ip` / `time`（`time` 为 `last` 原始文本，避免 locale 解析；`reboot`/`shutdown`/`wtmp` 伪记录被过滤） |

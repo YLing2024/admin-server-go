@@ -27,9 +27,9 @@ func TestInfoHandler(t *testing.T) {
 	if info.Memory.Total <= 0 || info.CPUCores != runtime.NumCPU() || len(info.Load) != 3 {
 		t.Errorf("资源字段异常: mem=%+v cores=%d load=%v", info.Memory, info.CPUCores, info.Load)
 	}
-	if info.Disks == nil || info.Ports.Items == nil || info.Systemd.Failed == nil || info.Logins.Items == nil {
-		t.Errorf("数组字段不得为 null: disks=%v ports=%v systemd=%v logins=%v",
-			info.Disks, info.Ports.Items, info.Systemd.Failed, info.Logins.Items)
+	if info.Disks == nil || info.Addresses == nil || info.Ports.Items == nil || info.Systemd.Failed == nil || info.Logins.Items == nil {
+		t.Errorf("数组字段不得为 null: disks=%v addresses=%v ports=%v systemd=%v logins=%v",
+			info.Disks, info.Addresses, info.Ports.Items, info.Systemd.Failed, info.Logins.Items)
 	}
 }
 

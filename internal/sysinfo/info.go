@@ -18,22 +18,24 @@ import (
 
 // Info 是 GET /api/admin/system/info 的响应体。
 type Info struct {
-	OS            string        `json:"os"`
-	Kernel        string        `json:"kernel"`
-	Arch          string        `json:"arch"`
-	Hostname      string        `json:"hostname"`
-	BootTime      int64         `json:"bootTime"`
-	UptimeSeconds int64         `json:"uptimeSeconds"`
-	Load          []float64     `json:"load"`
-	CPUModel      string        `json:"cpuModel"`
-	CPUCores      int           `json:"cpuCores"`
-	Memory        Memory        `json:"memory"`
-	Swap          Swap          `json:"swap"`
-	Disks         []Disk        `json:"disks"`
-	Ports         Ports         `json:"ports"`
-	Systemd       Systemd       `json:"systemd"`
-	Logins        Logins        `json:"logins"`
-	Temperatures  []Temperature `json:"temperatures,omitempty"`
+	OS            string    `json:"os"`
+	Kernel        string    `json:"kernel"`
+	Arch          string    `json:"arch"`
+	Hostname      string    `json:"hostname"`
+	BootTime      int64     `json:"bootTime"`
+	UptimeSeconds int64     `json:"uptimeSeconds"`
+	Load          []float64 `json:"load"`
+	CPUModel      string    `json:"cpuModel"`
+	CPUCores      int       `json:"cpuCores"`
+	Memory        Memory    `json:"memory"`
+	Swap          Swap      `json:"swap"`
+	Disks         []Disk    `json:"disks"`
+	// Addresses 是本机公网 IPv4（默认出口在前）；全部为私网时为空数组。
+	Addresses    []Address     `json:"addresses"`
+	Ports        Ports         `json:"ports"`
+	Systemd      Systemd       `json:"systemd"`
+	Logins       Logins        `json:"logins"`
+	Temperatures []Temperature `json:"temperatures,omitempty"`
 }
 
 // Memory 是物理内存概况，单位字节。
@@ -159,6 +161,7 @@ func collectInfo(ctx context.Context) Info {
 			Used:  int64(math.Round(mem.SwapUsed)),
 		},
 		Disks:        readDisks(),
+		Addresses:    readAddresses(),
 		Ports:        ports,
 		Systemd:      systemd,
 		Logins:       logins,

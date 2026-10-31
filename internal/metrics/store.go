@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -305,19 +306,39 @@ func (s *Service) persistMetricPoint(point HistoryPoint, memUsed, memTotal float
 	}
 }
 
+// clampPercent 把百分比夹到 0–100：statfs / PSI 偶发脏值（例如按字节算出的百万级数）
+// 会把趋势图 Y 轴整个拉开，历史库里也会留下无法解释的点。
+func clampPercent(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
+// clampPercentPtr 是 clampPercent 的可空版本：nil 保持 nil（库里写 NULL，不是 0）。
+func clampPercentPtr(v *float64) any {
+	if v == nil {
+		return nil
+	}
+	return clampPercent(*v)
+}
+
 // metricPointValues 把历史点摊平成「列名 → 值」，供动态列（含按盘速率）按 MetricKeys 取参。
 // 未命中的列写 NULL（老列在旧表里就是 NULL）。
 func metricPointValues(point HistoryPoint, memUsed, memTotal float64) map[string]any {
 	values := map[string]any{
-		"cpu":           point.CPU,
-		"mem_percent":   point.MemPercent,
+		"cpu":           clampPercent(point.CPU),
+		"mem_percent":   clampPercent(point.MemPercent),
 		"mem_used":      memUsed,
 		"mem_total":     memTotal,
-		"disk_percent":  point.DiskPercent,
-		"swap_percent":  point.SwapPercent,
-		"psi_mem_avg10": point.PsiMemAvg10,
-		"psi_cpu_avg10": point.PsiCPUAvg10,
-		"psi_io_avg10":  point.PsiIOAvg10,
+		"disk_percent":  clampPercent(point.DiskPercent),
+		"swap_percent":  clampPercent(point.SwapPercent),
+		"psi_mem_avg10": clampPercentPtr(point.PsiMemAvg10),
+		"psi_cpu_avg10": clampPercentPtr(point.PsiCPUAvg10),
+		"psi_io_avg10":  clampPercentPtr(point.PsiIOAvg10),
 		"net_rx_rate":   point.NetRxRate,
 		"net_tx_rate":   point.NetTxRate,
 		"disk_io_read":  point.DiskIORead,
